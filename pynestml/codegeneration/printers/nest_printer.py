@@ -173,10 +173,8 @@ class NestPrinter(Printer):
             return self.print_small_stmt(node.small_stmt, prefix=prefix)
 
     def print_assignment(self, node, prefix="") -> str:
-        symbol = node.get_scope().resolve_to_symbol(
-            node.lhs.get_complete_name(), SymbolKind.VARIABLE)
-        ret = self.reference_converter.print_origin(
-            symbol) + self.reference_converter.name(symbol) + ' '
+        symbol = node.get_scope().resolve_to_symbol(node.lhs.get_complete_name(), SymbolKind.VARIABLE)
+        ret = self.reference_converter.print_origin(symbol) + self.reference_converter.name(symbol) + ' '
         if node.is_compound_quotient:
             ret += '/='
         elif node.is_compound_product:
@@ -191,8 +189,7 @@ class NestPrinter(Printer):
         return ret
 
     def print_variable(self, node: ASTVariable) -> str:
-        symbol = node.get_scope().resolve_to_symbol(
-            node.lhs.get_complete_name(), SymbolKind.VARIABLE)
+        symbol = node.get_scope().resolve_to_symbol(node.lhs.get_complete_name(), SymbolKind.VARIABLE)
         ret = self.reference_converter.print_origin(symbol) + node.name
         for i in range(1, node.differential_order + 1):
             ret += "__d"
@@ -232,8 +229,7 @@ class NestPrinter(Printer):
         :return: the corresponding representation of the event
         """
         assert (ast_body is not None and isinstance(ast_body, ASTNeuronOrSynapseBody)), \
-            '(PyNestML.CodeGeneration.Printer) No or wrong type of body provided (%s)!' % type(
-                ast_body)
+            '(PyNestML.CodeGeneration.Printer) No or wrong type of body provided (%s)!' % type(ast_body)
         outputs = ast_body.get_output_blocks()
         if len(outputs) == 0:
             # no output port defined in the model: pretend dummy spike output port to obtain usable model
@@ -246,8 +242,7 @@ class NestPrinter(Printer):
         if output.is_continuous():
             return 'nest::CurrentEvent'
 
-        raise RuntimeError(
-            'Unexpected output type. Must be continuous or spike, is %s.' % str(output))
+        raise RuntimeError('Unexpected output type. Must be continuous or spike, is %s.' % str(output))
 
     def print_buffer_initialization(self, variable_symbol) -> str:
         """
@@ -268,16 +263,12 @@ class NestPrinter(Printer):
         from pynestml.meta_model.ast_function import ASTFunction
         from pynestml.symbols.symbol import SymbolKind
         assert (ast_function is not None and isinstance(ast_function, ASTFunction)), \
-            '(PyNestML.CodeGeneration.Printer) No or wrong type of ast_function provided (%s)!' % type(
-                ast_function)
-        function_symbol = ast_function.get_scope().resolve_to_symbol(
-            ast_function.get_name(), SymbolKind.FUNCTION)
+            '(PyNestML.CodeGeneration.Printer) No or wrong type of ast_function provided (%s)!' % type(ast_function)
+        function_symbol = ast_function.get_scope().resolve_to_symbol(ast_function.get_name(), SymbolKind.FUNCTION)
         if function_symbol is None:
-            raise RuntimeError(
-                'Cannot resolve the method ' + ast_function.get_name())
+            raise RuntimeError('Cannot resolve the method ' + ast_function.get_name())
         declaration = ast_function.print_comment('//') + '\n'
-        declaration += self.types_printer.convert(
-            function_symbol.get_return_type()).replace('.', '::')
+        declaration += self.types_printer.convert(function_symbol.get_return_type()).replace('.', '::')
         declaration += ' '
         declaration += ast_function.get_name() + '('
         for typeSym in function_symbol.get_parameter_types():
@@ -298,23 +289,18 @@ class NestPrinter(Printer):
         :return: the corresponding string representation.
         """
         assert isinstance(ast_function, ASTFunction), \
-            '(PyNestML.CodeGeneration.Printer) No or wrong type of ast_function provided (%s)!' % type(
-                ast_function)
+            '(PyNestML.CodeGeneration.Printer) No or wrong type of ast_function provided (%s)!' % type(ast_function)
         assert isinstance(namespace, str), \
-            '(PyNestML.CodeGeneration.Printer) No or wrong type of namespace provided (%s)!' % type(
-                namespace)
-        function_symbol = ast_function.get_scope().resolve_to_symbol(
-            ast_function.get_name(), SymbolKind.FUNCTION)
+            '(PyNestML.CodeGeneration.Printer) No or wrong type of namespace provided (%s)!' % type(namespace)
+        function_symbol = ast_function.get_scope().resolve_to_symbol(ast_function.get_name(), SymbolKind.FUNCTION)
         if function_symbol is None:
-            raise RuntimeError(
-                'Cannot resolve the method ' + ast_function.get_name())
+            raise RuntimeError('Cannot resolve the method ' + ast_function.get_name())
         # first collect all parameters
         params = list()
         for param in ast_function.get_parameters():
             params.append(param.get_name())
         declaration = ast_function.print_comment('//') + '\n'
-        declaration += self.types_printer.convert(
-            function_symbol.get_return_type()).replace('.', '::')
+        declaration += self.types_printer.convert(function_symbol.get_return_type()).replace('.', '::')
         declaration += ' '
         if namespace is not None:
             declaration += namespace + '::'
@@ -338,13 +324,11 @@ class NestPrinter(Printer):
         :return: a string representation of the getter
         """
         assert (ast_buffer is not None and isinstance(ast_buffer, VariableSymbol)), \
-            '(PyNestML.CodeGeneration.Printer) No or wrong type of ast_buffer symbol provided (%s)!' % type(
-                ast_buffer)
+            '(PyNestML.CodeGeneration.Printer) No or wrong type of ast_buffer symbol provided (%s)!' % type(ast_buffer)
         if ast_buffer.is_spike_input_port() and ast_buffer.is_inhibitory() and ast_buffer.is_excitatory():
             return 'inline ' + self.types_printer.convert(ast_buffer.get_type_symbol()) + '&' + ' get_' \
                    + ast_buffer.get_symbol_name() + '() {' + \
-                   '  return spike_inputs_[' + \
-                ast_buffer.get_symbol_name().upper() + ' - 1]; }'
+                   '  return spike_inputs_[' + ast_buffer.get_symbol_name().upper() + ' - 1]; }'
         else:
             return self.print_buffer_getter(ast_buffer, True)
 
@@ -358,19 +342,16 @@ class NestPrinter(Printer):
         :return: a string representation of the getter.
         """
         assert (ast_buffer is not None and isinstance(ast_buffer, VariableSymbol)), \
-            '(PyNestMl.CodeGeneration.Printer) No or wrong type of ast_buffer symbol provided (%s)!' % type(
-                ast_buffer)
+            '(PyNestMl.CodeGeneration.Printer) No or wrong type of ast_buffer symbol provided (%s)!' % type(ast_buffer)
         assert (is_in_struct is not None and isinstance(is_in_struct, bool)), \
             '(PyNestMl.CodeGeneration.Printer) No or wrong type of is-in-struct provided (%s)!' % type(is_in_struct)
         declaration = 'inline '
         if ast_buffer.has_vector_parameter():
             declaration += 'std::vector<'
-            declaration += self.types_printer.convert(
-                ast_buffer.get_type_symbol())
+            declaration += self.types_printer.convert(ast_buffer.get_type_symbol())
             declaration += '> &'
         else:
-            declaration += self.types_printer.convert(
-                ast_buffer.get_type_symbol()) + '&'
+            declaration += self.types_printer.convert(ast_buffer.get_type_symbol()) + '&'
         declaration += ' get_' + ast_buffer.get_symbol_name() + '() {'
         if is_in_struct:
             declaration += 'return ' + ast_buffer.get_symbol_name() + ';'
@@ -398,14 +379,11 @@ class NestPrinter(Printer):
         :return: the corresponding string representation
         """
         assert isinstance(ast_buffer, VariableSymbol), \
-            '(PyNestML.CodeGeneration.Printer) No or wrong type of ast_buffer symbol provided (%s)!' % type(
-                ast_buffer)
+            '(PyNestML.CodeGeneration.Printer) No or wrong type of ast_buffer symbol provided (%s)!' % type(ast_buffer)
         if ast_buffer.has_vector_parameter():
-            buffer_type = 'std::vector< ' + \
-                self.types_printer.convert(ast_buffer.get_type_symbol()) + ' >'
+            buffer_type = 'std::vector< ' + self.types_printer.convert(ast_buffer.get_type_symbol()) + ' >'
         else:
-            buffer_type = self.types_printer.convert(
-                ast_buffer.get_type_symbol())
+            buffer_type = self.types_printer.convert(ast_buffer.get_type_symbol())
         buffer_type.replace(".", "::")
         return buffer_type + " " + ast_buffer.get_symbol_name()
 
@@ -416,8 +394,7 @@ class NestPrinter(Printer):
         :return: the corresponding string representation
         """
         assert isinstance(ast_buffer, VariableSymbol), \
-            '(PyNestML.CodeGeneration.Printer) No or wrong type of ast_buffer symbol provided (%s)!' % type(
-                ast_buffer)
+            '(PyNestML.CodeGeneration.Printer) No or wrong type of ast_buffer symbol provided (%s)!' % type(ast_buffer)
         return '//!< Buffer for input (type: ' + ast_buffer.get_type_symbol().get_symbol_name() + ')'
 
     def print_vector_size_parameter(self, variable: VariableSymbol) -> str:
@@ -426,21 +403,7 @@ class NestPrinter(Printer):
         :param variable: Vector variable
         :return: vector size parameter
         """
-        vector_parameter = variable.get_vector_parameter()
-        vector_parameter_var = ASTVariable(
-            vector_parameter, scope=variable.get_corresponding_scope())
-        symbol = vector_parameter_var.get_scope().resolve_to_symbol(vector_parameter_var.get_complete_name(),
-                                                                    SymbolKind.VARIABLE)
-        vector_param = ""
-        if symbol is not None:
-            # size parameter is a variable
-            vector_param += self.reference_converter.print_origin(
-                symbol) + vector_parameter
-        else:
-            # size parameter is an integer
-            vector_param += vector_parameter
-
-        return vector_param
+        return self.reference_converter.convert_vector_parameter(variable)
 
     def print_vector_declaration(self, variable: VariableSymbol) -> str:
         """
@@ -449,8 +412,7 @@ class NestPrinter(Printer):
         :return: the corresponding vector declaration statement
         """
         assert isinstance(variable, VariableSymbol), \
-            '(PyNestML.CodeGeneration.Printer) No or wrong type of variable symbol provided (%s)!' % type(
-                variable)
+            '(PyNestML.CodeGeneration.Printer) No or wrong type of variable symbol provided (%s)!' % type(variable)
 
         decl_str = self.reference_converter.print_origin(variable) + variable.get_symbol_name() + \
             ".resize(" + self.print_vector_size_parameter(variable) + ", " + \
@@ -466,11 +428,9 @@ class NestPrinter(Printer):
         :return: the corresponding delay parameter
         """
         assert isinstance(variable, VariableSymbol), \
-            '(PyNestML.CodeGeneration.Printer) No or wrong type of variable symbol provided (%s)!' % type(
-                variable)
+            '(PyNestML.CodeGeneration.Printer) No or wrong type of variable symbol provided (%s)!' % type(variable)
         delay_parameter = variable.get_delay_parameter()
-        delay_parameter_var = ASTVariable(
-            delay_parameter, scope=variable.get_corresponding_scope())
+        delay_parameter_var = ASTVariable(delay_parameter, scope=variable.get_corresponding_scope())
         symbol = delay_parameter_var.get_scope().resolve_to_symbol(delay_parameter_var.get_complete_name(),
                                                                    SymbolKind.VARIABLE)
         if symbol is not None:
@@ -478,14 +438,14 @@ class NestPrinter(Printer):
             return self.reference_converter.print_origin(symbol) + delay_parameter
         return delay_parameter
 
-    def print_expression(self, node: ASTExpressionNode, prefix: str = "", with_origins=True) -> str:
+    def print_expression(self, node: ASTExpressionNode, prefix: str = "") -> str:
         """
         Prints the handed over rhs to a nest readable format.
         :param node: a single meta_model node.
         :type node: ASTExpressionNode
         :return: the corresponding string representation
         """
-        return self._expression_printer.print_expression(node, prefix=prefix, with_origins=with_origins)
+        return self._expression_printer.print_expression(node, prefix=prefix)
 
     def print_function_call(self, node: ASTFunctionCall) -> str:
         """
