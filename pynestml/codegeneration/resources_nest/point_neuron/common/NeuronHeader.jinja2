@@ -220,7 +220,7 @@ public:
   /**
    * Used to validate that we can send {{outputEvent}} to desired target:port.
   **/
-  nest::port send_test_event(nest::Node& target, nest::rport receptor_type, nest::synindex, bool) override;
+  nest::port send_test_event(nest::Node& target, nest::rport receptor_type, nest::synindex, bool);
 
   // -------------------------------------------------------------------------
   //   Functions handling incoming events.
@@ -229,27 +229,27 @@ public:
   // -------------------------------------------------------------------------
 
 {% if has_spike_input %}
-  void handle(nest::SpikeEvent &) override;        //! accept spikes
+  void handle(nest::SpikeEvent &);        //! accept spikes
 {%- endif %}
 {%- if has_continuous_input %}
-  void handle(nest::CurrentEvent &) override;      //! accept input current
+  void handle(nest::CurrentEvent &);      //! accept input current
 {%- endif %}
-  void handle(nest::DataLoggingRequest &) override;//! allow recording with multimeter
+  void handle(nest::DataLoggingRequest &);//! allow recording with multimeter
 
 {%- if has_spike_input %}
-  nest::port handles_test_event(nest::SpikeEvent&, nest::port) override;
+  nest::port handles_test_event(nest::SpikeEvent&, nest::port);
 {%- endif %}
 {%- if has_continuous_input %}
-  nest::port handles_test_event(nest::CurrentEvent&, nest::port) override;
+  nest::port handles_test_event(nest::CurrentEvent&, nest::port);
 {%- endif %}
-  nest::port handles_test_event(nest::DataLoggingRequest&, nest::port) override;
+  nest::port handles_test_event(nest::DataLoggingRequest&, nest::port);
 
   // -------------------------------------------------------------------------
   //   Functions for getting/setting parameters and state values.
   // -------------------------------------------------------------------------
 
-  void get_status(DictionaryDatum &) const override;
-  void set_status(const DictionaryDatum &) override;
+  void get_status(DictionaryDatum &) const;
+  void set_status(const DictionaryDatum &);
 
 {%- if paired_synapse is defined %}
   // support for spike archiving
@@ -389,27 +389,27 @@ private:
   /**
    * Reset state of neuron.
   **/
-  void init_state_(const Node& proto) override;
+  void init_state_(const Node& proto);
 {%- endif %}
 
   /**
    * Reset internal buffers of neuron.
   **/
-  void init_buffers_() override;
+  void init_buffers_();
 
   /**
    * Initialize auxiliary quantities, leave parameters and state untouched.
   **/
-{%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
-  void calibrate() override;
+{%- if nest_version.startswith("v2") or nest_version.startswith("v3.0") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
+  void calibrate();
 {%- else %}
-  void pre_run_hook() override;
+  void pre_run_hook();
 {%- endif %}
 
   /**
    * Take neuron through given time interval
   **/
-  void update(nest::Time const &, const long, const long) override;
+  void update(nest::Time const &, const long, const long);
 
   // The next two classes need to be friends to access the State_ class/member
 {%- if (has_state_vectors) %}
