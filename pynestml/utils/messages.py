@@ -21,10 +21,6 @@
 from enum import Enum
 from typing import Tuple
 
-from pynestml.meta_model.ast_inline_expression import ASTInlineExpression
-from collections.abc import Iterable
-from pynestml.meta_model.ast_function import ASTFunction
-
 
 class MessageCode(Enum):
     """
@@ -115,15 +111,6 @@ class MessageCode(Enum):
     PRIORITY_DEFINED_FOR_ONLY_ONE_EVENT_HANDLER = 82
     REPEATED_PRIORITY_VALUE = 83
     DELAY_VARIABLE = 84
-    CM_NO_GATING_VARIABLES = 100
-    CM_FUNCTION_MISSING = 101
-    CM_VARIABLES_NOT_DECLARED = 102
-    CM_FUNCTION_BAD_NUMBER_ARGS = 103
-    CM_FUNCTION_BAD_RETURN_TYPE = 104
-    CM_VARIABLE_NAME_MULTI_USE = 105
-    CM_NO_VALUE_ASSIGNMENT = 106
-    SYNS_BAD_BUFFER_COUNT = 107
-    CM_NO_V_COMP = 108
 
 
 class Messages:
@@ -169,10 +156,10 @@ class Messages:
         message = 'Error occurred during lexing: abort'
         return MessageCode.LEXER_ERROR, message
 
-    # @classmethod
-    # def get_could_not_determine_cond_based(cls, type_str, name):
-    #     message = "Unable to determine based on type '" + type_str + "' of variable '" + name + "' whether conductance-based or current-based"
-    #     return MessageCode.LEXER_ERROR, message
+    @classmethod
+    def get_could_not_determine_cond_based(cls, type_str, name):
+        message = "Unable to determine based on type '" + type_str + "' of variable '" + name + "' whether conductance-based or current-based"
+        return MessageCode.LEXER_ERROR, message
 
     @classmethod
     def get_parser_error(cls):
@@ -185,8 +172,7 @@ class Messages:
         return MessageCode.OPERATION_NOT_DEFINED, message
 
     @classmethod
-    def get_binary_operation_type_could_not_be_derived(
-            cls, lhs, operator, rhs, lhs_type, rhs_type):
+    def get_binary_operation_type_could_not_be_derived(cls, lhs, operator, rhs, lhs_type, rhs_type):
         message = 'The type of the expression (left-hand side = \'%s\'; binary operator = \'%s\'; right-hand side = \'%s\') could not be derived: left-hand side has type \'%s\' whereas right-hand side has type \'%s\'!' % (
             lhs, operator, rhs, lhs_type, rhs_type)
         return MessageCode.TYPE_MISMATCH, message
@@ -203,8 +189,7 @@ class Messages:
 
     @classmethod
     def get_implicit_magnitude_conversion(cls, lhs, rhs, conversion_factor):
-        message = 'Implicit magnitude conversion from %s to %s with factor %s ' % (
-            lhs.print_symbol(), rhs.print_symbol(), conversion_factor)
+        message = 'Implicit magnitude conversion from %s to %s with factor %s ' % (lhs.print_symbol(), rhs.print_symbol(), conversion_factor)
         return MessageCode.IMPLICIT_CAST, message
 
     @classmethod
@@ -217,13 +202,7 @@ class Messages:
         return MessageCode.START_SYMBOL_TABLE_BUILDING, 'Start building symbol table!'
 
     @classmethod
-    def get_function_call_implicit_cast(
-            cls,
-            arg_nr,
-            function_call,
-            expected_type,
-            got_type,
-            castable=False):
+    def get_function_call_implicit_cast(cls, arg_nr, function_call, expected_type, got_type, castable=False):
         """
         Returns a message indicating that an implicit cast has been performed.
         :param arg_nr: the number of the argument which is cast
@@ -275,17 +254,11 @@ class Messages:
         :return: a message
         :rtype:(MessageCode,str)
         """
-        message = 'Implicit casting from (compatible) type \'%s\' to \'%s\'.' % (
-            rhs_type, lhs_type)
+        message = 'Implicit casting from (compatible) type \'%s\' to \'%s\'.' % (rhs_type, lhs_type)
         return MessageCode.IMPLICIT_CAST, message
 
     @classmethod
-    def get_different_type_rhs_lhs(
-            cls,
-            rhs_expression,
-            lhs_expression,
-            rhs_type,
-            lhs_type):
+    def get_different_type_rhs_lhs(cls, rhs_expression, lhs_expression, rhs_type, lhs_type):
         """
         Returns a message indicating that the type of the lhs does not correspond to the one of the rhs and can not
         be cast down to a common type.
@@ -301,7 +274,10 @@ class Messages:
         :rtype:(MessageCode,str)
         """
         message = 'Type of lhs \'%s\' does not correspond to rhs \'%s\'! LHS: \'%s\', RHS: \'%s\'!' % (
-            lhs_expression, rhs_expression, lhs_type.print_symbol(), rhs_type.print_symbol())
+            lhs_expression,
+            rhs_expression,
+            lhs_type.print_symbol(),
+            rhs_type.print_symbol())
         return MessageCode.CAST_NOT_POSSIBLE, message
 
     @classmethod
@@ -317,8 +293,7 @@ class Messages:
         """
         from pynestml.symbols.type_symbol import TypeSymbol
         assert (expected_type is not None and isinstance(expected_type, TypeSymbol)), \
-            '(PyNestML.Utils.Message) Not a type symbol provided (%s)!' % type(
-                expected_type)
+            '(PyNestML.Utils.Message) Not a type symbol provided (%s)!' % type(expected_type)
         assert (got_type is not None and isinstance(got_type, TypeSymbol)), \
             '(PyNestML.Utils.Message) Not a type symbol provided (%s)!' % type(got_type)
         message = 'Actual type different from expected. Expected: \'%s\', got: \'%s\'!' % (
@@ -362,15 +337,12 @@ class Messages:
         :rtype: (MessageCode,str)
         """
         assert (input_port_name is not None and isinstance(input_port_name, str)), \
-            '(PyNestML.Utils.Message) Not a string provided (%s)!' % type(
-                input_port_name)
-        from pynestml.symbols.predefined_types import PredefinedTypes
+            '(PyNestML.Utils.Message) Not a string provided (%s)!' % type(input_port_name)
         message = 'No type declared for spiking input port \'%s\'!' % input_port_name
         return MessageCode.SPIKE_INPUT_PORT_TYPE_NOT_DEFINED, message
 
     @classmethod
-    def get_model_contains_errors(
-            cls, model_name: str) -> Tuple[MessageCode, str]:
+    def get_model_contains_errors(cls, model_name: str) -> Tuple[MessageCode, str]:
         """
         Returns a message indicating that a model contains errors thus no code is generated.
         :param model_name: the name of the model
@@ -382,8 +354,7 @@ class Messages:
         return MessageCode.MODEL_CONTAINS_ERRORS, message
 
     @classmethod
-    def get_start_processing_model(
-            cls, model_name: str) -> Tuple[MessageCode, str]:
+    def get_start_processing_model(cls, model_name: str) -> Tuple[MessageCode, str]:
         """
         Returns a message indicating that the processing of a model is started.
         :param model_name: the name of the model
@@ -409,8 +380,7 @@ class Messages:
             '(PyNestML.Utils.Message) Not a string provided (%s)!' % type(model_name)
         assert (path is not None and isinstance(path, str)), \
             '(PyNestML.Utils.Message) Not a string provided (%s)!' % type(path)
-        message = 'Successfully generated code for the model: \'' + \
-            model_name + '\' in: \'' + path + '\' !'
+        message = 'Successfully generated code for the model: \'' + model_name + '\' in: \'' + path + '\' !'
         return MessageCode.CODE_SUCCESSFULLY_GENERATED, message
 
     @classmethod
@@ -498,8 +468,7 @@ class Messages:
         return MessageCode.ARG_NOT_KERNEL_OR_EQUATION, message
 
     @classmethod
-    def get_second_arg_not_a_spike_port(
-            cls, func_name: str) -> Tuple[MessageCode, str]:
+    def get_second_arg_not_a_spike_port(cls, func_name: str) -> Tuple[MessageCode, str]:
         """
         Indicates that the second argument of the NESTML convolve() call is not a spiking input port.
         :param func_name: the name of the function
@@ -551,8 +520,7 @@ class Messages:
         """
         assert (name is not None and isinstance(name, str)), \
             '(PyNestML.Utils.Message) Not a string provided (%s)!' % name
-        message = 'Continuous time input port \'%s\' specified with type keywords (%s)!' % (
-            name, keyword)
+        message = 'Continuous time input port \'%s\' specified with type keywords (%s)!' % (name, keyword)
         return MessageCode.CONTINUOUS_INPUT_PORT_WITH_QUALIFIERS, message
 
     @classmethod
@@ -749,8 +717,7 @@ class Messages:
             '(PyNestML.Utils.Message) Not a string provided (%s)!' % type(art1)
         assert (art2 is not None and isinstance(art2, str)), \
             '(PyNestML.Utils.Message) Not a string provided (%s)!' % type(art2)
-        message = 'Name collision of \'%s\' in \'%s\' and \'%s\'!' % (
-            name, art1, art2)
+        message = 'Name collision of \'%s\' in \'%s\' and \'%s\'!' % (name, art1, art2)
         return MessageCode.NAME_COLLISION, message
 
     @classmethod
@@ -838,8 +805,7 @@ class Messages:
             '(PyNestML.Utils.Message) Not a string provided (%s)!' % type(vector)
         assert (non_vector is not None and isinstance(non_vector, list)), \
             '(PyNestML.Utils.Message) Not a string provided (%s)!' % type(non_vector)
-        message = 'Vector value \'%s\' used in a non-vector declaration of variables \'%s\'!' % (
-            vector, non_vector)
+        message = 'Vector value \'%s\' used in a non-vector declaration of variables \'%s\'!' % (vector, non_vector)
         return MessageCode.VECTOR_IN_NON_VECTOR, message
 
     @classmethod
@@ -1017,29 +983,22 @@ class Messages:
         return MessageCode.NOT_NEUROSCIENCE_UNIT, message
 
     @classmethod
-    def get_ode_needs_consistent_units(
-            cls,
-            name,
-            differential_order,
-            lhs_type,
-            rhs_type):
+    def get_ode_needs_consistent_units(cls, name, differential_order, lhs_type, rhs_type):
         assert (name is not None and isinstance(name, str)), \
             '(PyNestML.Utils.Message) Not a string provided (%s)!' % type(name)
         message = 'ODE definition for \''
         if differential_order > 1:
-            message += 'd^' + str(differential_order) + ' ' + \
-                name + ' / dt^' + str(differential_order) + '\''
+            message += 'd^' + str(differential_order) + ' ' + name + ' / dt^' + str(differential_order) + '\''
         if differential_order > 0:
             message += 'd ' + name + ' / dt\''
         else:
             message += '\'' + str(name) + '\''
-        message += ' has inconsistent units: expected \'' + \
-            lhs_type.print_symbol() + '\', got \'' + rhs_type.print_symbol() + '\''
+        message += ' has inconsistent units: expected \'' + lhs_type.print_symbol() + '\', got \'' + \
+            rhs_type.print_symbol() + '\''
         return MessageCode.ODE_NEEDS_CONSISTENT_UNITS, message
 
     @classmethod
-    def get_ode_function_needs_consistent_units(
-            cls, name, declared_type, expression_type):
+    def get_ode_function_needs_consistent_units(cls, name, declared_type, expression_type):
         assert (name is not None and isinstance(name, str)), \
             '(PyNestML.Utils.Message) Not a string provided (%s)!' % type(name)
         message = 'ODE function definition for \'' + name + '\' has inconsistent units: expected \'' + \
@@ -1075,13 +1034,7 @@ class Messages:
         return MessageCode.ANALYSING_TRANSFORMING_NEURON, message
 
     @classmethod
-    def templated_arg_types_inconsistent(
-            cls,
-            function_name,
-            failing_arg_idx,
-            other_args_idx,
-            failing_arg_type_str,
-            other_type_str):
+    def templated_arg_types_inconsistent(cls, function_name, failing_arg_idx, other_args_idx, failing_arg_type_str, other_type_str):
         """
         For templated function arguments, indicates inconsistency between (formal) template argument types and actual derived types.
         :param name: the name of the neuron model
@@ -1091,8 +1044,7 @@ class Messages:
         """
         message = 'In function \'' + function_name + '\': actual derived type of templated parameter ' + \
             str(failing_arg_idx + 1) + ' is \'' + failing_arg_type_str + '\', which is inconsistent with that of parameter(s) ' + \
-            ', '.join([str(_ + 1) for _ in other_args_idx]) + \
-            ', which have type \'' + other_type_str + '\''
+            ', '.join([str(_ + 1) for _ in other_args_idx]) + ', which have type \'' + other_type_str + '\''
         return MessageCode.TEMPLATED_ARG_TYPES_INCONSISTENT, message
 
     @classmethod
@@ -1145,11 +1097,7 @@ class Messages:
         return MessageCode.EMIT_SPIKE_FUNCTION_BUT_NO_OUTPUT_PORT, message
 
     @classmethod
-    def get_kernel_wrong_type(cls,
-                              kernel_name: str,
-                              differential_order: int,
-                              actual_type: str) -> Tuple[MessageCode,
-                                                         str]:
+    def get_kernel_wrong_type(cls, kernel_name: str, differential_order: int, actual_type: str) -> Tuple[MessageCode, str]:
         """
         Returns a message indicating that the type of a kernel is wrong.
         :param kernel_name: the name of the kernel
@@ -1168,19 +1116,14 @@ class Messages:
         return MessageCode.KERNEL_WRONG_TYPE, message
 
     @classmethod
-    def get_kernel_iv_wrong_type(cls,
-                                 iv_name: str,
-                                 actual_type: str,
-                                 expected_type: str) -> Tuple[MessageCode,
-                                                              str]:
+    def get_kernel_iv_wrong_type(cls, iv_name: str, actual_type: str, expected_type: str) -> Tuple[MessageCode, str]:
         """
         Returns a message indicating that the type of a kernel initial value is wrong.
         :param iv_name: the name of the state variable with an initial value
         :param actual_type: the name of the actual type that was found in the model
         :param expected_type: the name of the type that was expected
         """
-        message = 'Initial value \'%s\' was found to be of type \'%s\' (should be %s)!' % (
-            iv_name, actual_type, expected_type)
+        message = 'Initial value \'%s\' was found to be of type \'%s\' (should be %s)!' % (iv_name, actual_type, expected_type)
         return MessageCode.KERNEL_IV_WRONG_TYPE, message
 
     @classmethod
@@ -1201,14 +1144,13 @@ class Messages:
     @classmethod
     def get_template_root_path_created(cls, templates_root_dir: str):
         message = "Given template root path is not an absolute path. " \
-                  "Creating the absolute path with default templates directory '" + \
-            templates_root_dir + "'"
+                  "Creating the absolute path with default templates directory '" + templates_root_dir + "'"
         return MessageCode.TEMPLATE_ROOT_PATH_CREATED, message
 
     @classmethod
     def get_vector_parameter_wrong_block(cls, var, block):
-        message = "The vector parameter '" + var + "' is declared in the wrong block '" + block + \
-            "'. " "The vector parameter can only be declared in parameters or internals block."
+        message = "The vector parameter '" + var + "' is declared in the wrong block '" + block + "'. " \
+                  "The vector parameter can only be declared in parameters or internals block."
         return MessageCode.VECTOR_PARAMETER_WRONG_BLOCK, message
 
     @classmethod
@@ -1219,15 +1161,13 @@ class Messages:
 
     @classmethod
     def get_vector_parameter_wrong_size(cls, var, value):
-        message = "The vector parameter '" + var + "' has value '" + \
-            value + "' " "which is less than or equal to 0."
+        message = "The vector parameter '" + var + "' has value '" + value + "' " \
+                  "which is less than or equal to 0."
         return MessageCode.VECTOR_PARAMETER_WRONG_SIZE, message
 
     @classmethod
-    def get_priority_defined_for_only_one_receive_block(
-            cls, event_handler_port_name: str):
-        message = "Priority defined for only one event handler (" + \
-            event_handler_port_name + ")"
+    def get_priority_defined_for_only_one_receive_block(cls, event_handler_port_name: str):
+        message = "Priority defined for only one event handler (" + event_handler_port_name + ")"
         return MessageCode.PRIORITY_DEFINED_FOR_ONLY_ONE_EVENT_HANDLER, message
 
     @classmethod
@@ -1239,103 +1179,3 @@ class Messages:
     def get_function_is_delay_variable(cls, func):
         message = "Function '" + func + "' is not a function but a delay variable."
         return MessageCode.DELAY_VARIABLE, message
-
-    @classmethod
-    def get_no_gating_variables(
-            cls,
-            cm_inline_expr: ASTInlineExpression,
-            ion_channel_name: str):
-        """
-        Indicates that if you defined an inline expression inside the equations block
-        that uses no kernels / has no convolution calls
-        then then there must be at least one variable name that ends with _{x}
-        For example an inline "Na" must have at least one variable ending with "_Na"
-        :return: a message
-        :rtype: (MessageCode,str)
-        """
-
-        message = "No gating variables found inside declaration of '" + \
-            cm_inline_expr.variable_name + "', "
-        message += "\nmeaning no variable ends with the suffix '_" + \
-            ion_channel_name + "' here. "
-        message += "This suffix indicates that a variable is a gating variable. "
-        message += "At least one gating variable is expected to exist."
-
-        return MessageCode.CM_NO_GATING_VARIABLES, message
-
-    @classmethod
-    def get_cm_inline_expression_variable_used_mulitple_times(
-            cls,
-            cm_inline_expr: ASTInlineExpression,
-            bad_variable_name: str,
-            ion_channel_name: str):
-        message = "Variable name '" + bad_variable_name + \
-            "' seems to be used multiple times"
-        message += "' inside inline expression '" + cm_inline_expr.variable_name + "'. "
-        message += "\nVariables are not allowed to occur multiple times here."
-
-        return MessageCode.CM_VARIABLE_NAME_MULTI_USE, message
-
-    @classmethod
-    def get_expected_cm_function_missing(
-            cls,
-            ion_channel_name: str,
-            variable_name: str,
-            function_name: str):
-        message = "Implementation of a function called '" + function_name + "' not found. "
-        message += "It is expected because of variable '" + \
-            variable_name + "' in the ion channel '" + ion_channel_name + "'"
-        return MessageCode.CM_FUNCTION_MISSING, message
-
-    @classmethod
-    def get_expected_cm_function_wrong_args_count(
-            cls, ion_channel_name: str, variable_name, astfun: ASTFunction):
-        message = "Function '" + astfun.name + \
-            "' is expected to have exactly one Argument. "
-        message += "It is related to variable '" + variable_name + \
-            "' in the ion channel '" + ion_channel_name + "'"
-        return MessageCode.CM_FUNCTION_BAD_NUMBER_ARGS, message
-
-    @classmethod
-    def get_expected_cm_function_bad_return_type(
-            cls, ion_channel_name: str, astfun: ASTFunction):
-        message = "'" + ion_channel_name + "' channel function '" + \
-            astfun.name + "' must return real. "
-        return MessageCode.CM_FUNCTION_BAD_RETURN_TYPE, message
-
-    @classmethod
-    def get_expected_cm_variables_missing_in_blocks(
-            cls,
-            missing_variable_to_proper_block: Iterable,
-            expected_variables_to_reason: dict):
-        message = "The following variables not found:\n"
-        for missing_var, proper_location in missing_variable_to_proper_block.items():
-            message += "Variable with name '" + missing_var
-            message += "' not found but expected to exist inside of " + \
-                proper_location + " because of position "
-            message += str(
-                expected_variables_to_reason[missing_var].get_source_position()) + "\n"
-        return MessageCode.CM_VARIABLES_NOT_DECLARED, message
-
-    @classmethod
-    def get_cm_variable_value_missing(cls, varname: str):
-        message = "The following variable has no value assinged: " + varname + "\n"
-        return MessageCode.CM_NO_VALUE_ASSIGNMENT, message
-
-    @classmethod
-    def get_v_comp_variable_value_missing(
-            cls, neuron_name: str, missing_variable_name):
-        message = "Missing state variable '" + missing_variable_name
-        message += "' in side of neuron +'" + neuron_name + "'+. "
-        message += "You have passed NEST_COMPARTMENTAL flag to the generator, thereby activating compartmental mode."
-        message += "In this mode, such variable must be declared in the state block.\n"
-        message += "This variable represents the dynamically calculated value of membrane potential "
-        message += "and should be utilized in your equations for voltage activated ion channels."
-        return MessageCode.CM_NO_V_COMP, message
-
-    @classmethod
-    def get_syns_bad_buffer_count(cls, buffers: set, synapse_name: str):
-        message = "Synapse `\'%s\' uses the following input buffers: %s" % (
-            synapse_name, buffers)
-        message += " However exaxtly one spike input buffer per synapse is allowed."
-        return MessageCode.SYNS_BAD_BUFFER_COUNT, message
