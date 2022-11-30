@@ -581,6 +581,120 @@ class ASTChannelInformationCollector(object):
 
         return ret
 
+
+#----------------------- New collection functions for generalized ODE Descriptions
+
+    """
+        detect_cm_inline_expressions_ode
+
+        analyzes any inline without kernels and returns
+
+        {
+            "Na":
+            {
+                "ASTInlineExpression": ASTInlineExpression,
+                "ode_variables": [ASTVariable, ASTVariable, ASTVariable, ...], # potential ode variables
+
+            },
+            "K":
+            {
+                ...
+            }
+        }
+        """
+
+    @classmethod
+    def detect_cm_inline_expressions_ode(cls, neuron):
+        if not FrontendConfiguration.target_is_compartmental():
+            return defaultdict()
+
+        inline_expressions_inside_equations_block_collector_visitor = ASTInlineExpressionInsideEquationsCollectorVisitor()
+        neuron.accept(
+            inline_expressions_inside_equations_block_collector_visitor)
+        inline_expressions_dict = inline_expressions_inside_equations_block_collector_visitor.inline_expressions_to_variables
+
+        # filter for any inline that has no kernel
+        relevant_inline_expressions_to_variables = defaultdict(lambda: list())
+        for expression, variables in inline_expressions_dict.items():
+            inline_expression_name = expression.variable_name
+            if not inline_expressions_inside_equations_block_collector_visitor.is_synapse_inline(
+                    inline_expression_name):
+                relevant_inline_expressions_to_variables[expression] = variables
+
+        # create info structure
+        chan_info = defaultdict()
+        for inline_expression, inner_variables in relevant_inline_expressions_to_variables.items():
+            info = defaultdict()
+            channel_name = cls.cm_expression_to_channel_name(inline_expression)
+            info["ASTInlineExpression"] = inline_expression
+            info["ode_variables"] = inner_variables
+            chan_info[channel_name] = info
+
+        return chan_info
+
+
+    """
+        analyzes cm inlines for expected odes
+        input:
+        {
+            "Na":
+            {
+                "ASTInlineExpression": ASTInlineExpression,
+                "ode_variables": [ASTVariable, ASTVariable, ASTVariable, ...]
+
+            },
+            "K":
+            {
+                ...
+            }
+        }
+
+        output:
+        {
+            "Na":
+            {
+                "ASTInlineExpression": ASTInlineExpression,
+                "ode_variables":
+                {
+                    "m":
+                    {
+                        "ASTVariable": ASTVariable
+                        "describing_ode": ASTOdeEquation
+                    },
+                    "h":
+                    {
+                        "ASTVariable": ASTVariable
+                        "describing_ode": ASTOdeEquation
+                    },
+                    ...
+                },
+            }
+            "K":
+            {
+                ...
+            }
+        }
+
+        """
+
+    @classmethod
+    def search_related_ode(cls, neuron, chan_info):
+        ret = copy.copy(chan_info)
+
+
+    @classmethod
+    def check_related_declarations_and_definitions(cls, neuron, chan_info):
+
+
+#----------------------- Test function for building a chan_info prototype
+    @classmethod
+    def create_chan_info_ode_prototype_HH(cls, chan_info):
+        ret = copy.copy(chan_info)
+
+
+
+#----------------------- Collector root functions
+
     @classmethod
     def get_chan_info(cls, neuron: ASTNeuron):
         """
