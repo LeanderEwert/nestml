@@ -29,6 +29,16 @@ from pynestml.meta_model.ast_neuron import ASTNeuron
 from pynestml.utils.logger import Logger, LoggingLevel
 from pynestml.utils.messages import Messages
 from pynestml.visitors.ast_visitor import ASTVisitor
+from pynestml.codegeneration.printers.nestml_printer import NESTMLPrinter
+
+#--------------ode additional imports
+
+from pynestml.symbols.variable_symbol import VariableSymbol
+from pynestml.codegeneration.printers.ode_toolbox_reference_converter import ODEToolboxReferenceConverter
+from pynestml.codegeneration.printers.unitless_expression_printer import UnitlessExpressionPrinter
+from pynestml.utils.ast_utils import ASTUtils
+from odetoolbox import analysis
+import json
 
 
 class ASTChannelInformationCollector(object):
@@ -632,6 +642,65 @@ class ASTChannelInformationCollector(object):
 
         return chan_info
 
+    @classmethod
+    def filter_for_actual_ode_vars_and_add_equations(cls, neuron, chan_info):
+        #collect all ODEs
+        ode_collector = ASTODEEquationCollectorVisitor()
+        neuron.accept(ode_collector)
+        odes = ode_collector.all_ode_equations
+
+        for ion_channel_name, channel_info in chan_info.items():
+            variables = channel_info["ode_variables"]
+            chan_var_info = defaultdict()
+
+            for variable_used in variables:
+                variable_odes = list()
+
+                for ode in odes:
+                    if variable_used.get_name() == ode.get_lhs().get_name():
+                        variable_odes.append(ode)
+
+                if len(variable_odes) > 0:
+                    info = defaultdict()
+                    info["ASTVariable"] = variable_used
+                    info["ASTOdeEquation"] = variable_odes[0]
+                    chan_var_info[variable_used.get_name()] = info
+
+            chan_info[ion_channel_name]["ode_variables"] = chan_var_info
+        return chan_info
+
+    @classmethod
+    def prepare_equations_for_ode_toolbox(cls, chan_info):
+        for ion_channel_name, channel_info in chan_info.items():
+            for ode_variable_name, ode_info in channel_info["ode_variables"].items():
+                nestml_printer = NESTMLPrinter()
+                ode_nestml_expression = nestml_printer.print_ode_equation(ode_info["ASTOdeEquation"])
+                chan_info[ion_channel_name]["ode_variables"][ode_variable_name]["ode_nestml_expression"] = ode_nestml_expression
+
+        for ion_channel_name, channel_info in chan_info.items():
+            for ode_variable_name, ode_info in channel_info["ode_variables"].items():
+                odetoolbox_indict = {}
+                gsl_converter = ODEToolboxReferenceConverter()
+                gsl_printer = UnitlessExpressionPrinter(gsl_converter)
+                odetoolbox_indict["dynamics"] = []
+                lhs = ASTUtils.to_ode_toolbox_name(ode_info["ASTOdeEquation"].get_lhs().get_complete_name())
+                rhs = gsl_printer.print_expression(ode_info["ASTOdeEquation"].get_rhs())
+                entry = {"expression": lhs + " = " + rhs}
+                #entry["initial_values"] = {}
+                odetoolbox_indict["dynamics"].append(entry)
+                chan_info[ion_channel_name]["ode_variables"][ode_variable_name]["ode_toolbox_input"] = odetoolbox_indict
+
+        return chan_info
+
+    @classmethod
+    def collect_raw_odetoolbox_output(cls, chan_info):
+        for ion_channel_name, channel_info in chan_info.items():
+            for ode_variable_name, ode_info in channel_info["ode_variables"].items():
+                solver_result = analysis(ode_info["ode_toolbox_input"], disable_stiffness_check=True)
+                chan_info[ion_channel_name]["ode_variables"][ode_variable_name]["ode_toolbox_output"] = solver_result
+
+
+
 
     """
         analyzes cm inlines for expected odes
@@ -677,19 +746,32 @@ class ASTChannelInformationCollector(object):
 
         """
 
-    @classmethod
-    def search_related_ode(cls, neuron, chan_info):
-        ret = copy.copy(chan_info)
-
-
-    @classmethod
-    def check_related_declarations_and_definitions(cls, neuron, chan_info):
-
 
 #----------------------- Test function for building a chan_info prototype
     @classmethod
-    def create_chan_info_ode_prototype_HH(cls, chan_info):
+    def create_chan_info_ode_prototype_hh(cls, chan_info):
         ret = copy.copy(chan_info)
+
+    @classmethod
+    def print_dictionary(cls, dictionary, rec_step):
+        for name, element in dictionary.items():
+            for indent in range(rec_step):
+                print("----", end="")
+            print(name + ": ", end="")
+            if isinstance(element, defaultdict):
+                print("\n")
+                cls.print_dictionary(element, rec_step+1)
+            else:
+                if hasattr(element, 'get_name()'):
+                    print(element.get_name(), end="")
+                elif isinstance(element, str):
+                    print(element, end="")
+                elif isinstance(element, dict):
+                    print(json.dumps(element, indent=4), end="")
+
+                print("("+type(element).__name__+")", end="")
+            print("\n")
+
 
 
 
@@ -732,11 +814,23 @@ class ASTChannelInformationCollector(object):
                 cls.first_time_run[neuron] = False
                 return True
 
+            chan_info = cls.detect_cm_inline_expressions_ode(neuron)
+            cls.print_dictionary(chan_info, 0)
+            chan_info = cls.filter_for_actual_ode_vars_and_add_equations(neuron, chan_info)
+            cls.print_dictionary(chan_info, 0)
+            chan_info = cls.prepare_equations_for_ode_toolbox(chan_info)
+            cls.print_dictionary(chan_info, 0)
+            cls.collect_raw_odetoolbox_output(chan_info)
+            cls.print_dictionary(chan_info, 0)
+            print("\n !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+
+            """
             chan_info = cls.calc_expected_function_names_for_channels(
                 chan_info)
             chan_info = cls.check_and_find_functions(neuron, chan_info)
             chan_info = cls.add_channel_parameters_section_and_enforce_proper_variable_names(
                 neuron, chan_info)
+            """
 
             # now check for existence of expected state variables
             # and add their ASTVariable objects to chan_info
@@ -1069,3 +1163,30 @@ class ASTInlineExpressionInsideEquationsCollectorVisitor(ASTVisitor):
 
     def endvisit_simple_expression(self, node):
         self.inside_simple_expression = False
+
+#----------------- New ode helpers
+class ASTODEEquationCollectorVisitor(ASTVisitor):
+    def __init__(self):
+        super(ASTODEEquationCollectorVisitor, self).__init__()
+        self.inside_ode_expression = False
+        self.all_ode_equations = list()
+
+    def visit_ode_equation(self, node):
+        self.inside_ode_expression = True
+        self.all_ode_equations.append(node.clone())
+
+    def endvisit_ode_equation(self, node):
+        self.inside_ode_expression = False
+
+class ASTVariableCollectorVisitor(ASTVisitor):
+    def __init__(self):
+        super(ASTVariableCollectorVisitor, self).__init__()
+        self.inside_variable = False
+        self.all_variables = list()
+
+    def visit_variable(self, node):
+        self.inside_variable = True
+        self.all_variables.append(node.clone())
+
+    def endvisit_variable(self, node):
+        self.inside_variable = False
