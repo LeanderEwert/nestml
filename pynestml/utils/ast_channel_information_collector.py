@@ -670,7 +670,7 @@ class ASTChannelInformationCollector(object):
         return chan_info
 
     @classmethod
-    def prepare_equations_for_ode_toolbox(cls, chan_info):
+    def prepare_equations_for_ode_toolbox(cls, neuron, chan_info):
         for ion_channel_name, channel_info in chan_info.items():
             for ode_variable_name, ode_info in channel_info["ode_variables"].items():
                 nestml_printer = NESTMLPrinter()
@@ -679,6 +679,7 @@ class ASTChannelInformationCollector(object):
 
         for ion_channel_name, channel_info in chan_info.items():
             for ode_variable_name, ode_info in channel_info["ode_variables"].items():
+                #Expression:
                 odetoolbox_indict = {}
                 gsl_converter = ODEToolboxReferenceConverter()
                 gsl_printer = UnitlessExpressionPrinter(gsl_converter)
@@ -686,7 +687,16 @@ class ASTChannelInformationCollector(object):
                 lhs = ASTUtils.to_ode_toolbox_name(ode_info["ASTOdeEquation"].get_lhs().get_complete_name())
                 rhs = gsl_printer.print_expression(ode_info["ASTOdeEquation"].get_rhs())
                 entry = {"expression": lhs + " = " + rhs}
-                #entry["initial_values"] = {}
+
+                #Initial values:
+                entry["initial_values"] = {}
+                symbol_order = ode_info["ASTOdeEquation"].get_lhs().get_differential_order()
+                for order in range(symbol_order):
+                    iv_symbol_name = ode_info["ASTOdeEquation"].get_lhs().get_name() + "'" * order
+                    initial_value_expr = neuron.get_initial_value(iv_symbol_name)
+                    entry["initial_values"][ASTUtils.to_ode_toolbox_name(iv_symbol_name)] = gsl_printer.print_expression(initial_value_expr)
+
+
                 odetoolbox_indict["dynamics"].append(entry)
                 chan_info[ion_channel_name]["ode_variables"][ode_variable_name]["ode_toolbox_input"] = odetoolbox_indict
 
@@ -753,23 +763,30 @@ class ASTChannelInformationCollector(object):
         ret = copy.copy(chan_info)
 
     @classmethod
+    def print_element(cls, name, element, rec_step):
+        for indent in range(rec_step):
+            print("----", end="")
+        print(name + ": ", end="")
+        if isinstance(element, defaultdict):
+            print("\n")
+            cls.print_dictionary(element, rec_step + 1)
+        else:
+            if hasattr(element, 'get_name()'):
+                print(element.get_name(), end="")
+            elif isinstance(element, str):
+                print(element, end="")
+            elif isinstance(element, dict):
+                print(json.dumps(element, indent=4), end="")
+            elif isinstance(element, list):
+                for index in len(element):
+                    cls.print_element(index, element[index], rec_step+1)
+
+            print("(" + type(element).__name__ + ")", end="")
+
+    @classmethod
     def print_dictionary(cls, dictionary, rec_step):
         for name, element in dictionary.items():
-            for indent in range(rec_step):
-                print("----", end="")
-            print(name + ": ", end="")
-            if isinstance(element, defaultdict):
-                print("\n")
-                cls.print_dictionary(element, rec_step+1)
-            else:
-                if hasattr(element, 'get_name()'):
-                    print(element.get_name(), end="")
-                elif isinstance(element, str):
-                    print(element, end="")
-                elif isinstance(element, dict):
-                    print(json.dumps(element, indent=4), end="")
-
-                print("("+type(element).__name__+")", end="")
+            cls.print_element(name, element, rec_step)
             print("\n")
 
 
@@ -818,7 +835,7 @@ class ASTChannelInformationCollector(object):
             cls.print_dictionary(chan_info, 0)
             chan_info = cls.filter_for_actual_ode_vars_and_add_equations(neuron, chan_info)
             cls.print_dictionary(chan_info, 0)
-            chan_info = cls.prepare_equations_for_ode_toolbox(chan_info)
+            chan_info = cls.prepare_equations_for_ode_toolbox(neuron, chan_info)
             cls.print_dictionary(chan_info, 0)
             cls.collect_raw_odetoolbox_output(chan_info)
             cls.print_dictionary(chan_info, 0)
