@@ -163,6 +163,7 @@ class CoCosManager:
         :param neuron: a single neuron.
         :type neuron: ast_neuron
         """
+        print("CHECK_CO_CO FIRST")
         CoCoCompartmentalModel.check_co_co(neuron)
 
     @classmethod

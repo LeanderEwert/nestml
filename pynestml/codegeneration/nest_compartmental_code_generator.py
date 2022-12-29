@@ -166,7 +166,9 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
             self,
             neurons: List[ASTNeuron],
             synapses: List[ASTSynapse] = None) -> None:
+        print("ABOUT TO ANALYSE AND TRANSFORM NEURONS")
         self.analyse_transform_neurons(neurons)
+        print("ABOUT TO GENERATE NEURONS")
         self.generate_neurons(neurons)
         self.generate_module_code(neurons)
 
@@ -614,7 +616,9 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
                 # must have been defined to get here
                 expr_ast.update_scope(
                     neuron.get_equations_blocks().get_scope())
+                print("ENTER ASTSTV")
                 expr_ast.accept(ASTSymbolTableVisitor())
+                print("EXIT ASTSTV")
                 namespace["update_expressions"][sym] = expr_ast
 
             namespace["propagators"] = self.analytic_solver[neuron.get_name()
@@ -649,7 +653,9 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
                 # must have been defined to get here
                 expr_ast.update_scope(
                     neuron.get_equations_blocks().get_scope())
+                print("BIS HIERHIN UND NICHT WEITER!")
                 expr_ast.accept(ASTSymbolTableVisitor())
+                print("WEITER")
                 namespace["numeric_update_expressions"][sym] = expr_ast
 
             namespace["useGSL"] = namespace["uses_numeric_solver"]
@@ -676,8 +682,12 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
         namespace["cm_unique_suffix"] = self.getUniqueSuffix(neuron)
         namespace["chan_info"] = ASTChannelInformationCollector.get_chan_info(
             neuron)
+        print("AFTER GET_CHAN_INFO:")
+        ASTChannelInformationCollector.print_dictionary(namespace["chan_info"], 0)
         namespace["chan_info"] = ChanInfoEnricher.enrich_with_additional_info(
             neuron, namespace["chan_info"])
+        print("AFTER ENRICH_WITH_ADDITIONAL_INFO:")
+        ASTChannelInformationCollector.print_dictionary(namespace["chan_info"], 0)
 
         namespace["syns_info"] = SynsProcessing.get_syns_info(neuron)
         syns_info_enricher = SynsInfoEnricher(neuron)

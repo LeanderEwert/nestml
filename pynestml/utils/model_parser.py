@@ -136,9 +136,11 @@ class ModelParser:
 
         # create and update the corresponding symbol tables
         SymbolTable.initialize_symbol_table(ast.get_source_position())
+        print("NEURON AST_SYMBOL_TABLE_VISITOR")
         for neuron in ast.get_neuron_list():
             neuron.accept(ASTSymbolTableVisitor())
             SymbolTable.add_neuron_scope(neuron.get_name(), neuron.get_scope())
+        print("SYNAPSE AST_SYMBOL_TABLE_VISITOR")
         for synapse in ast.get_synapse_list():
             synapse.accept(ASTSymbolTableVisitor())
             SymbolTable.add_synapse_scope(synapse.get_name(), synapse.get_scope())

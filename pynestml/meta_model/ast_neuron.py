@@ -554,6 +554,7 @@ class ASTNeuron(ASTNeuronOrSynapse):
         from pynestml.visitors.ast_symbol_table_visitor import ASTSymbolTableVisitor
         symtable_vistor = ASTSymbolTableVisitor()
         symtable_vistor.block_type_stack.push(BlockType.INTERNALS)
+        print("ENTERING SYMTABLE_VISITOR")
         declaration.accept(symtable_vistor)
         symtable_vistor.block_type_stack.pop()
 
