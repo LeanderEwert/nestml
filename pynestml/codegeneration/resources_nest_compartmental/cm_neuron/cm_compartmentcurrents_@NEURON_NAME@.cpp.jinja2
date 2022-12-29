@@ -76,7 +76,7 @@
 // {{ion_channel_name}} channel //////////////////////////////////////////////////////////////////
 nest::{{ion_channel_name}}{{cm_unique_suffix}}::{{ion_channel_name}}{{cm_unique_suffix}}()
 
-{%- for pure_variable_name, variable_info in channel_info["gating_variables"].items() %}
+{%- for pure_variable_name, variable_info in channel_info["ode_variables"].items() %}
 // state variable {{pure_variable_name -}}
 {%- set variable = variable_info["state_variable"] %}
 {%- set rhs_expression = variable_info["rhs_expression"] %}
@@ -136,10 +136,12 @@ nest::{{ion_channel_name}}{{cm_unique_suffix}}::append_recordables(std::map< Nam
 
 std::pair< double, double > nest::{{ion_channel_name}}{{cm_unique_suffix}}::f_numstep(const double v_comp)
 {
-    {%- for original_state, original_state_info in channel_info["original_states"].items() %}
-    {%- for state_variable_name, state_variable_info in original_state_info["ode_solution"]["ode_states"].items() %}
-        {{state_variable_name}} = {{local_variables_printer.print_expression(state_variable_info["update_expression"], with_origins = False)}};
-    {%- endfor %}
+    {%- for inline_state, inline_state_info in channel_info.items() %}
+        {%- for ode_variable, ode_variable_info in inline_state_info["ode_variables"].items() %}
+            {%- for state, update_expression_rhs in ode_variable_info["ode_toolbox_output"]["update_expressions"].items() %}
+                {{state}} = {{local_variables_printer.print_expression(update_expression_rhs, with_origins = False)}};
+            {%- endfor %}
+        {%- endfor %}
     {%- endfor %}
 
     // compute the conductance of the {{ion_channel_name}} channel
