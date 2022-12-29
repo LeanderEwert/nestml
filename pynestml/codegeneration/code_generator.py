@@ -163,11 +163,15 @@ class CodeGenerator(WithOptions):
         """
         from pynestml.frontend.frontend_configuration import FrontendConfiguration
 
+        print("GENERATE NEURONS")
         for neuron in neurons:
+            print("GENERATE A NEURON")
             self.generate_neuron_code(neuron)
             if not Logger.has_errors(neuron):
                 code, message = Messages.get_code_generated(neuron.get_name(), FrontendConfiguration.get_target_path())
                 Logger.log_message(neuron, code, message, neuron.get_source_position(), LoggingLevel.INFO)
+
+        print("GENERATE NEURONS FINISHED")
 
     def generate_synapses(self, synapses: Sequence[ASTSynapse]) -> None:
         """
@@ -222,6 +226,7 @@ class CodeGenerator(WithOptions):
                 f.write(str(_file))
 
     def generate_neuron_code(self, neuron: ASTNeuron) -> None:
+        print("GENERATE_MODEL_CODE")
         self.generate_model_code(neuron.get_name(),
                                  model_templates=self._model_templates["neuron"],
                                  template_namespace=self._get_neuron_model_namespace(neuron),
