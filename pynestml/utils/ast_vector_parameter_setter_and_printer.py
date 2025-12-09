@@ -23,33 +23,43 @@ from pynestml.codegeneration.printers.ast_printer import ASTPrinter
 from pynestml.codegeneration.printers.nest_variable_printer import NESTVariablePrinter
 
 
-class ASTVectorParameterSetterAndPrinter(ASTPrinter):
+class ASTPreAndSuffixSetterAndPrinter(ASTPrinter):
     """
     This file is part of the compartmental code generation process.
 
     Part of vectorized printing.
     """
     def __init__(self):
-        super(ASTVectorParameterSetterAndPrinter, self).__init__()
+        super(ASTPreAndSuffixSetterAndPrinter, self).__init__()
         self.inside_variable = False
-        self.vector_parameter = ""
+        self.prefix = ""
+        self.suffix = ""
         self.printer = None
         self.model = None
 
-    def set_vector_parameter(self, node, vector_parameter=None):
-        self.vector_parameter = vector_parameter
+    def set_suffix(self, node, suffix=None):
+        self.suffix = suffix
+        node.accept(self)
+
+    def set_prefix(self, node, prefix=None):
+        self.prefix = prefix
         node.accept(self)
 
     def print(self, node):
         assert isinstance(self.printer._simple_expression_printer._variable_printer, NESTVariablePrinter)
 
         self.printer._simple_expression_printer._variable_printer.cpp_variable_suffix = ""
+        self.printer._simple_expression_printer._variable_printer.cpp_variable_prefix = ""
 
-        if self.vector_parameter:
-            self.printer._simple_expression_printer._variable_printer.cpp_variable_suffix = "[" + self.vector_parameter + "]"
+        if self.suffix:
+            self.printer._simple_expression_printer._variable_printer.cpp_variable_suffix = self.suffix
+
+        if self.prefix:
+            self.printer._simple_expression_printer._variable_printer.cpp_variable_prefix = self.prefix
 
         text = self.printer.print(node)
 
         self.printer._simple_expression_printer._variable_printer.cpp_variable_suffix = ""
+        self.printer._simple_expression_printer._variable_printer.cpp_variable_prefix = ""
 
         return text

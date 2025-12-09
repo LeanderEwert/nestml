@@ -62,7 +62,7 @@ from pynestml.symbols.symbol import SymbolKind
 from pynestml.utils.global_info_enricher import GlobalInfoEnricher
 from pynestml.utils.global_processing import GlobalProcessing
 from pynestml.transformers.inline_expression_expansion_transformer import InlineExpressionExpansionTransformer
-from pynestml.utils.ast_vector_parameter_setter_and_printer_factory import ASTVectorParameterSetterAndPrinterFactory
+from pynestml.utils.ast_vector_parameter_setter_and_printer_factory import ASTPreAndSuffixSetterAndPrinterFactory
 from pynestml.utils.mechanism_processing import MechanismProcessing
 from pynestml.utils.channel_processing import ChannelProcessing
 from pynestml.utils.concentration_processing import ConcentrationProcessing
@@ -695,17 +695,30 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
 
         class VectorPrinter():
             def __init__(self, neuron, printer):
-                self.printer = ASTVectorParameterSetterAndPrinterFactory(neuron, printer)
-                self.std_vector_parameter = None
+                self.printer = ASTPreAndSuffixSetterAndPrinterFactory(neuron, printer)
+                self.suffix = None
 
             def print(self, expression, index="i"):
-                self.std_vector_parameter = index
-                index_printer = self.printer.create_ast_vector_parameter_setter_and_printer(index)
+                self.suffix = "[" + index + "]"
+                index_printer = self.printer.create_ast_vector_parameter_setter_and_printer(suffix = self.suffix)
+                return index_printer.print(expression)
+
+        class CUDAPrinter():
+            def __init__(self, neuron, printer):
+                self.printer = ASTPreAndSuffixSetterAndPrinterFactory(neuron, printer)
+                self.suffix = None
+
+            def print(self, expression, array_name="vars", index="i"):
+                self.prefix = array_name + "[i_"
+                self.suffix = "+" + index + "]"
+                index_printer = self.printer.create_ast_vector_parameter_setter_and_printer(prefix = self.prefix, suffix = self.suffix)
                 return index_printer.print(expression)
 
         vector_printer = VectorPrinter(neuron, self._printer_no_origin)
+        cuda_printer = CUDAPrinter(neuron, self._printer_no_origin)
 
         namespace["vector_printer"] = vector_printer
+        namespace["cuda_printer"] = cuda_printer
 
         # NESTML syntax keywords
         namespace["PyNestMLLexer"] = {}

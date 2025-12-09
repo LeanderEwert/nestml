@@ -48,6 +48,7 @@ class NESTVariablePrinter(CppVariablePrinter):
         self.enforce_getter = enforce_getter
         self.variables_special_cases = variables_special_cases
         self.cpp_variable_suffix = ""
+        self.cpp_variable_prefix = ""
         # self.postsynaptic_getter_string_ = "start->get_%s()"   # XXX: TODO: see https://github.com/nest/nestml/issues/1163
         # self.postsynaptic_getter_string_ = "((post_neuron_t*)(__target))->get_%s(t_hist_entry_ms)"
         self.postsynaptic_getter_string_ = "((post_neuron_t*)(__target))->get_%s(get_t())"
@@ -126,17 +127,17 @@ class NESTVariablePrinter(CppVariablePrinter):
         if symbol.is_inline_expression:
             # there might not be a corresponding defined state variable; insist on calling the getter function
             if self.enforce_getter:
-                return "get_" + self._print(variable, symbol, with_origin=False) + vector_param + "()" + self.cpp_variable_suffix
+                return self.cpp_variable_prefix + "get_" + self._print(variable, symbol, with_origin=False) + vector_param + "()" + self.cpp_variable_suffix
             # modification to not enforce getter function:
             else:
-                return self._print(variable, symbol, with_origin=False) + self.cpp_variable_suffix
+                return self.cpp_variable_prefix + self._print(variable, symbol, with_origin=False) + self.cpp_variable_suffix
 
         assert not symbol.is_kernel(), "Cannot print kernel; kernel should have been converted during code generation"
 
         if symbol.is_state() or symbol.is_inline_expression:
-            return self._print(variable, symbol, with_origin=self.with_origin) + vector_param + self.cpp_variable_suffix
+            return self.cpp_variable_prefix + self._print(variable, symbol, with_origin=self.with_origin) + vector_param + self.cpp_variable_suffix
 
-        return self._print(variable, symbol, with_origin=self.with_origin) + vector_param + self.cpp_variable_suffix
+        return self.cpp_variable_prefix + self._print(variable, symbol, with_origin=self.with_origin) + vector_param + self.cpp_variable_suffix
 
     def _print_delay_variable(self, variable: ASTVariable) -> str:
         """
@@ -167,8 +168,13 @@ class NESTVariablePrinter(CppVariablePrinter):
                     var_name += "_" + str(variable.get_vector_parameter())
             return "spike_inputs_grid_sum_[" + var_name + " - MIN_SPIKE_RECEPTOR]"
 
+        return_symbol = variable_symbol.get_symbol_name()
         if self.cpp_variable_suffix:
-            return variable_symbol.get_symbol_name() + self.cpp_variable_suffix
+            return_symbol += self.cpp_variable_suffix
+        if self.cpp_variable_prefix:
+            return_symbol = self.cpp_variable_prefix + return_symbol
+        if self.cpp_variable_suffix or self.cpp_variable_prefix:
+            return return_symbol
 
         assert variable_symbol.is_continuous_input_port()
         return "continuous_inputs_grid_sum_[" + variable.get_name().upper() + "]"
