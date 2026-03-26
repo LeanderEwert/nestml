@@ -196,6 +196,7 @@ private:
   void set_compartment_variables();
   void set_leafs();
   void compute_sweeping_order( std::vector< Compartment{{cm_unique_suffix}}* > parallel_comps );
+  void create_tree_data_soa_by_sweeping_order();
 
   std::vector< double > v_comp_vec;
   std::vector< double > ca__div__dt_vec;

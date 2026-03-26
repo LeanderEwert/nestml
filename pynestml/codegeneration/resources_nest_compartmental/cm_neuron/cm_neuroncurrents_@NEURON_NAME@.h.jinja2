@@ -99,6 +99,9 @@ private:
 
     // ion-channel root-inline value
     std::vector< double > i_tot_{{ion_channel_name}} = {};
+    std::vector< double > i_vals_{{ion_channel_name}} = {};
+    std::vector< double > g_vals_{{ion_channel_name}} = {};
+    std::vector< std::pair< std::size_t, int > > con_area = {};
 
     //zero recordable variable in case of zero contribution channel
     double zero_recordable = 0;
@@ -319,6 +322,9 @@ private:
   std::vector < double > s_val = {};
 
   std::vector< double > i_tot_{{receptor_name}} = {};
+  std::vector< double > i_vals_{{receptor_name}} = {};
+  std::vector< double > g_vals_{{receptor_name}} = {};
+  std::vector< std::pair< std::size_t, int > > con_area = {};
 
   // user declared internals in order they were declared, initialized via pre_run_hook() or calibrate()
   {%- for internal_name, internal_declaration in receptor_info["Internals"].items() %}
@@ -473,6 +479,9 @@ private:
   std::vector < double > s_val = {};
 
   std::vector< double > i_tot_{{receptor_name}} = {};
+  std::vector< double > i_vals_{{receptor_name}} = {};
+  std::vector< double > g_vals_{{receptor_name}} = {};
+  std::vector< std::pair< std::size_t, int > > con_area = {};
 
   // user declared internals in order they were declared, initialized via pre_run_hook() or calibrate()
   {%- for internal_name, internal_declaration in receptor_info["Internals"].items() %}
@@ -643,6 +652,9 @@ private:
   {%- endfor %}
 
   std::vector< double > i_tot_{{continuous_name}} = {};
+  std::vector< double > i_vals_{{continuous_name}} = {};
+  std::vector< double > g_vals_{{continuous_name}} = {};
+  std::vector< std::pair< std::size_t, int > > con_area = {};
 
   // user declared internals in order they were declared, initialized via pre_run_hook() or calibrate()
   {%- for internal_name, internal_declaration in continuous_info["Internals"].items() %}
@@ -730,9 +742,6 @@ private:
   // ion channels
   {%- for ion_channel_name, channel_info in chan_info.items() %}
   {{ion_channel_name}}{{cm_unique_suffix}} {{ion_channel_name}}{{channel_suffix}};
-
-  std::vector< double > i_vals_{{ion_channel_name}}{{channel_suffix}};
-  std::vector< double > g_vals_{{ion_channel_name}}{{channel_suffix}};
   {% endfor -%}
 
   // concentrations
@@ -743,27 +752,18 @@ private:
   // receptors
   {%- for receptor_name, receptor_info in recs_info.items() %}
   {{receptor_name}}{{cm_unique_suffix}} {{receptor_name}}{{receptor_suffix}};
-
-  std::vector< double > i_vals_{{receptor_name}}{{receptor_suffix}};
-  std::vector< double > g_vals_{{receptor_name}}{{receptor_suffix}};
   {% endfor -%}
 
   // receptors with synapses
 {%- for receptor_name, receptor_info in recs_info.items() %}
     {%- for synapse_name, synapse_info in syns_info.items() %}
   {{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}} {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}};
-
-  std::vector< double > i_vals_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}};
-  std::vector< double > g_vals_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}};
     {% endfor -%}
 {% endfor -%}
 
   // continuous inputs
   {%- for continuous_name, continuous_info in con_in_info.items() %}
   {{continuous_name}}{{cm_unique_suffix}} {{continuous_name}}{{continuous_suffix}};
-
-  std::vector< double > i_vals_{{continuous_name}}{{continuous_suffix}};
-  std::vector< double > g_vals_{{continuous_name}}{{continuous_suffix}};
   {% endfor -%}
 
   //number of compartments
@@ -773,33 +773,28 @@ private:
   // ion channels
   {%- for ion_channel_name, channel_info in chan_info.items() %}
   std::vector < double > {{ion_channel_name}}{{channel_suffix}}_shared_current;
-  std::vector < std::pair< std::size_t, int > > {{ion_channel_name}}{{channel_suffix}}_con_area;
   {% endfor -%}
 
   // concentrations
   {%- for concentration_name, concentration_info in conc_info.items() %}
   std::vector < double > {{concentration_name}}{{concentration_suffix}}_shared_concentration;
-  std::vector < std::pair< std::size_t, int > > {{concentration_name}}{{concentration_suffix}}_con_area;
   {% endfor -%}
 
   // receptors
   {%- for receptor_name, receptor_info in recs_info.items() %}
   std::vector < double > {{receptor_name}}{{receptor_suffix}}_shared_current;
-  std::vector < std::pair< std::size_t, int > > {{receptor_name}}{{receptor_suffix}}_con_area;
   {% endfor -%}
 
   // receptors with synapses
   {%- for receptor_name, receptor_info in recs_info.items() %}
   {%- for synapse_name, synapse_info in syns_info.items() %}
   std::vector < double > {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current;
-  std::vector < std::pair< std::size_t, int > > {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_con_area;
   {% endfor -%}
   {% endfor -%}
 
 // continuous inputs
   {%- for continuous_name, continuous_info in con_in_info.items() %}
   std::vector < double > {{continuous_name}}{{continuous_suffix}}_shared_current;
-  std::vector < std::pair< std::size_t, int > > {{continuous_name}}{{continuous_suffix}}_con_area;
   {% endfor -%}
 
   //compartment gi states
@@ -897,70 +892,6 @@ public:
     {{continuous_name}}{{continuous_suffix}}.pre_run_hook();
     {% endfor -%}
 {%- endif %}
-
-    int con_end_index;
-    {%- for ion_channel_name, channel_info in chan_info.items() %}
-    if({{ion_channel_name}}{{channel_suffix}}.neuron_{{ ion_channel_name }}_channel_count){
-        con_end_index = int({{ion_channel_name}}{{channel_suffix}}.compartment_association[0]);
-        {{ion_channel_name}}{{channel_suffix}}_con_area.push_back(std::pair< std::size_t, int >(0, con_end_index));
-    }
-    for(std::size_t chan_id = 1; chan_id < {{ion_channel_name}}{{channel_suffix}}.neuron_{{ ion_channel_name }}_channel_count; chan_id++){
-        if(!({{ion_channel_name}}{{channel_suffix}}.compartment_association[chan_id] == size_t(int(chan_id) + con_end_index))){
-            con_end_index = int({{ion_channel_name}}{{channel_suffix}}.compartment_association[chan_id]) - int(chan_id);
-            {{ion_channel_name}}{{channel_suffix}}_con_area.push_back(std::pair< std::size_t, int >(chan_id, con_end_index));
-        }
-    }
-    {% endfor -%}
-    {%- for concentration_name, concentration_info in conc_info.items() %}
-    if({{concentration_name}}{{concentration_suffix}}.neuron_{{ concentration_name }}_concentration_count){
-        con_end_index = int({{concentration_name}}{{concentration_suffix}}.compartment_association[0]);
-        {{concentration_name}}{{concentration_suffix}}_con_area.push_back(std::pair< std::size_t, int >(0, con_end_index));
-    }
-    for(std::size_t conc_id = 0; conc_id < {{concentration_name}}{{concentration_suffix}}.neuron_{{ concentration_name }}_concentration_count; conc_id++){
-        if(!({{concentration_name}}{{concentration_suffix}}.compartment_association[conc_id] == size_t(int(conc_id) + con_end_index))){
-            con_end_index = int({{concentration_name}}{{concentration_suffix}}.compartment_association[conc_id]) - int(conc_id);
-            {{concentration_name}}{{concentration_suffix}}_con_area.push_back(std::pair< std::size_t, int >(conc_id, con_end_index));
-        }
-    }
-    {% endfor -%}
-    {%- for receptor_name, receptor_info in recs_info.items() %}
-    if({{receptor_name}}{{receptor_suffix}}.neuron_{{ receptor_name }}_receptor_count){
-        con_end_index = int({{receptor_name}}{{receptor_suffix}}.compartment_association[0]);
-        {{receptor_name}}{{receptor_suffix}}_con_area.push_back(std::pair< std::size_t, int >(0, con_end_index));
-    }
-    for(std::size_t syn_id = 0; syn_id < {{receptor_name}}{{receptor_suffix}}.neuron_{{ receptor_name }}_receptor_count; syn_id++){
-        if(!({{receptor_name}}{{receptor_suffix}}.compartment_association[syn_id] == size_t(int(syn_id) + con_end_index))){
-            con_end_index = int({{receptor_name}}{{receptor_suffix}}.compartment_association[syn_id]) - int(syn_id);
-            {{receptor_name}}{{receptor_suffix}}_con_area.push_back(std::pair< std::size_t, int >(syn_id, con_end_index));
-        }
-    }
-    {% endfor -%}
-    {%- for receptor_name, receptor_info in recs_info.items() %}
-    {%- for synapse_name, synapse_info in syns_info.items() %}
-    if({{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.neuron_{{ receptor_name }}_receptor_count){
-        con_end_index = int({{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.compartment_association[0]);
-        {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_con_area.push_back(std::pair< std::size_t, int >(0, con_end_index));
-    }
-    for(std::size_t syn_id = 0; syn_id < {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.neuron_{{ receptor_name }}_receptor_count; syn_id++){
-        if(!({{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.compartment_association[syn_id] == size_t(int(syn_id) + con_end_index))){
-            con_end_index = int({{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.compartment_association[syn_id]) - int(syn_id);
-            {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_con_area.push_back(std::pair< std::size_t, int >(syn_id, con_end_index));
-        }
-    }
-    {% endfor -%}
-    {% endfor -%}
-    {%- for continuous_name, continuous_info in con_in_info.items() %}
-    if({{continuous_name}}{{continuous_suffix}}.neuron_{{ continuous_name }}_continuous_input_count){
-        con_end_index = int({{continuous_name}}{{continuous_suffix}}.compartment_association[0]);
-        {{continuous_name}}{{continuous_suffix}}_con_area.push_back(std::pair< std::size_t, int >(0, con_end_index));
-    }
-    for(std::size_t cont_id = 0; cont_id < {{continuous_name}}{{continuous_suffix}}.neuron_{{ continuous_name }}_continuous_input_count; cont_id++){
-        if(!({{continuous_name}}{{continuous_suffix}}.compartment_association[cont_id] == size_t(int(cont_id) + con_end_index))){
-            con_end_index = int({{continuous_name}}{{continuous_suffix}}.compartment_association[cont_id]) - (cont_id);
-            {{continuous_name}}{{continuous_suffix}}_con_area.push_back(std::pair< std::size_t, int >(cont_id, con_end_index));
-        }
-    }
-    {% endfor -%}
     initialized = true;
   }
   };
@@ -972,8 +903,6 @@ public:
     if ( type == "{{ion_channel_name}}" )
     {
       {{ion_channel_name}}{{channel_suffix}}.new_channel(compartment_id);
-      i_vals_{{ion_channel_name}}{{channel_suffix}}.push_back(0);
-      g_vals_{{ion_channel_name}}{{channel_suffix}}.push_back(0);
       mech_found = true;
     }
   {% endfor -%}
@@ -990,8 +919,6 @@ public:
     if ( type == "{{receptor_name}}" )
     {
       {{receptor_name}}{{receptor_suffix}}.new_receptor(compartment_id, multi_mech_index);
-      i_vals_{{receptor_name}}{{receptor_suffix}}.push_back(0);
-      g_vals_{{receptor_name}}{{receptor_suffix}}.push_back(0);
       mech_found = true;
     }
   {% endfor -%}
@@ -1001,8 +928,6 @@ public:
     if ( type == "{{receptor_name}}_{{synapse_name}}" )
     {
       {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.new_receptor(compartment_id, multi_mech_index);
-      i_vals_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.push_back(0);
-      g_vals_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.push_back(0);
       mech_found = true;
     }
   {% endfor -%}
@@ -1012,8 +937,6 @@ public:
     if ( type == "{{continuous_name}}" )
     {
       {{continuous_name}}{{continuous_suffix}}.new_continuous_input(compartment_id, multi_mech_index);
-      i_vals_{{continuous_name}}{{continuous_suffix}}.push_back(0);
-      g_vals_{{continuous_name}}{{continuous_suffix}}.push_back(0);
       mech_found = true;
     }
   {% endfor -%}
@@ -1032,8 +955,6 @@ public:
     if ( type == "{{ion_channel_name}}" )
     {
       {{ion_channel_name}}{{channel_suffix}}.new_channel(compartment_id, mechanism_params);
-      i_vals_{{ion_channel_name}}{{channel_suffix}}.push_back(0);
-      g_vals_{{ion_channel_name}}{{channel_suffix}}.push_back(0);
       mech_found = true;
     }
   {% endfor -%}
@@ -1050,8 +971,6 @@ public:
     if ( type == "{{receptor_name}}" )
     {
       {{receptor_name}}{{receptor_suffix}}.new_receptor(compartment_id, multi_mech_index, mechanism_params);
-      i_vals_{{receptor_name}}{{receptor_suffix}}.push_back(0);
-      g_vals_{{receptor_name}}{{receptor_suffix}}.push_back(0);
       mech_found = true;
     }
   {% endfor -%}
@@ -1061,8 +980,6 @@ public:
     if ( type == "{{receptor_name}}_{{synapse_name}}" )
     {
       {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.new_receptor(compartment_id, multi_mech_index, mechanism_params);
-      i_vals_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.push_back(0);
-      g_vals_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.push_back(0);
       mech_found = true;
     }
   {% endfor -%}
@@ -1072,8 +989,6 @@ public:
     if ( type == "{{continuous_name}}" )
     {
       {{continuous_name}}{{continuous_suffix}}.new_continuous_input(compartment_id, multi_mech_index, mechanism_params);
-      i_vals_{{continuous_name}}{{continuous_suffix}}.push_back(0);
-      g_vals_{{continuous_name}}{{continuous_suffix}}.push_back(0);
       mech_found = true;
     }
   {% endfor -%}
@@ -1281,39 +1196,13 @@ public:
                         {% endif %}{% for inline in concentration_info["Dependencies"]["continuous"] %}, {{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %});
 
     {% endfor -%}
-    std::size_t con_area_count;
-
     {%- for ion_channel_name, channel_info in chan_info.items() %}
     // contribution of {{ion_channel_name}} channel
     {{ion_channel_name}}{{channel_suffix}}.f_numstep(v_comp_vec{% for ode in channel_info["Dependencies"]["concentrations"] %}, {{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% if channel_info["Dependencies"]["receptors"]|length %}
         {% endif %}{% for inline in channel_info["Dependencies"]["receptors"] %}, {{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% if channel_info["Dependencies"]["channels"]|length %}
         {% endif %}{% for inline in channel_info["Dependencies"]["channels"] %}, {{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% if channel_info["Dependencies"]["continuous"]|length %}
         {% endif %}{% for inline in channel_info["Dependencies"]["continuous"] %}, {{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %}
-        , i_vals_{{ion_channel_name}}{{channel_suffix}}, g_vals_{{ion_channel_name}}{{channel_suffix}});
-
-    con_area_count = {{ion_channel_name}}{{channel_suffix}}_con_area.size();
-    if(con_area_count > 0){
-        for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
-            std::size_t con_area = {{ion_channel_name}}{{channel_suffix}}_con_area[con_area_index].first;
-            std::size_t next_con_area = {{ion_channel_name}}{{channel_suffix}}_con_area[con_area_index+1].first;
-            int offset = {{ion_channel_name}}{{channel_suffix}}_con_area[con_area_index].second;
-
-            #pragma omp simd
-            for(std::size_t chan_id = con_area; chan_id < next_con_area; chan_id++){
-                (*g_vals_comp)[chan_id+offset] += g_vals_{{ion_channel_name}}{{channel_suffix}}[chan_id];
-                (*i_vals_comp)[chan_id+offset] += i_vals_{{ion_channel_name}}{{channel_suffix}}[chan_id];
-            }
-        }
-
-        std::size_t con_area = {{ion_channel_name}}{{channel_suffix}}_con_area[con_area_count-1].first;
-        int offset = {{ion_channel_name}}{{channel_suffix}}_con_area[con_area_count-1].second;
-
-        #pragma omp simd
-        for(std::size_t chan_id = con_area; chan_id < {{ion_channel_name}}{{channel_suffix}}.neuron_{{ ion_channel_name }}_channel_count; chan_id++){
-            (*g_vals_comp)[chan_id+offset] += g_vals_{{ion_channel_name}}{{channel_suffix}}[chan_id];
-            (*i_vals_comp)[chan_id+offset] += i_vals_{{ion_channel_name}}{{channel_suffix}}[chan_id];
-        }
-    }
+        , *i_vals_comp, *g_vals_comp);
     {% endfor -%}
 
     {%- for receptor_name, receptor_info in recs_info.items() %}
@@ -1322,31 +1211,7 @@ public:
                         {% endif %}{% for inline in receptor_info["Dependencies"]["receptors"] %}, {{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% if receptor_info["Dependencies"]["channels"]|length %}
                         {% endif %}{% for inline in receptor_info["Dependencies"]["channels"] %}, {{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% if receptor_info["Dependencies"]["continuous"]|length %}
                         {% endif %}{% for inline in receptor_info["Dependencies"]["continuous"] %}, {{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %}
-                        , i_vals_{{receptor_name}}{{receptor_suffix}}, g_vals_{{receptor_name}}{{receptor_suffix}});
-
-    con_area_count = {{receptor_name}}{{receptor_suffix}}_con_area.size();
-    if(con_area_count > 0){
-        for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
-            std::size_t con_area = {{receptor_name}}{{receptor_suffix}}_con_area[con_area_index].first;
-            std::size_t next_con_area = {{receptor_name}}{{receptor_suffix}}_con_area[con_area_index+1].first;
-            int offset = {{receptor_name}}{{receptor_suffix}}_con_area[con_area_index].second;
-
-            #pragma omp simd
-            for(std::size_t syn_id = con_area; syn_id < next_con_area; syn_id++){
-                (*g_vals_comp)[syn_id+offset] += g_vals_{{receptor_name}}{{receptor_suffix}}[syn_id];
-                (*i_vals_comp)[syn_id+offset] += i_vals_{{receptor_name}}{{receptor_suffix}}[syn_id];
-            }
-        }
-
-        std::size_t con_area = {{receptor_name}}{{receptor_suffix}}_con_area[con_area_count-1].first;
-        int offset = {{receptor_name}}{{receptor_suffix}}_con_area[con_area_count-1].second;
-
-        #pragma omp simd
-        for(std::size_t syn_id = con_area; syn_id < {{receptor_name}}{{receptor_suffix}}.neuron_{{ receptor_name }}_receptor_count; syn_id++){
-            (*g_vals_comp)[syn_id+offset] += g_vals_{{receptor_name}}{{receptor_suffix}}[syn_id];
-            (*i_vals_comp)[syn_id+offset] += i_vals_{{receptor_name}}{{receptor_suffix}}[syn_id];
-        }
-    }
+                        , *i_vals_comp, *g_vals_comp);
     {% endfor -%}
 
     {%- for receptor_name, receptor_info in recs_info.items() %}
@@ -1361,31 +1226,8 @@ public:
                         {% endif %}{% for inline in rec_dep %}, {{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% if chan_dep|length %}
                         {% endif %}{% for inline in chan_dep %}, {{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% if con_in_dep|length %}
                         {% endif %}{% for inline in con_in_dep %}, {{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %}
-                        , i_vals_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}, g_vals_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}});
+                        , *i_vals_comp, *g_vals_comp);
     {%- endwith %}
-    con_area_count = {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_con_area.size();
-    if(con_area_count > 0){
-        for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
-            std::size_t con_area = {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_con_area[con_area_index].first;
-            std::size_t next_con_area = {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_con_area[con_area_index+1].first;
-            int offset = {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_con_area[con_area_index].second;
-
-            #pragma omp simd
-            for(std::size_t syn_id = con_area; syn_id < next_con_area; syn_id++){
-                (*g_vals_comp)[syn_id+offset] += g_vals_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}[syn_id];
-                (*i_vals_comp)[syn_id+offset] += i_vals_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}[syn_id];
-            }
-        }
-
-        std::size_t con_area = {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_con_area[con_area_count-1].first;
-        int offset = {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_con_area[con_area_count-1].second;
-
-        #pragma omp simd
-        for(std::size_t syn_id = con_area; syn_id < {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.neuron_{{ receptor_name }}_receptor_count; syn_id++){
-            (*g_vals_comp)[syn_id+offset] += g_vals_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}[syn_id];
-            (*i_vals_comp)[syn_id+offset] += i_vals_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}[syn_id];
-        }
-    }
     {% endfor -%}
     {% endfor -%}
 
@@ -1395,31 +1237,7 @@ public:
                         {% endif %}{% for inline in continuous_info["Dependencies"]["receptors"] %}, {{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% if continuous_info["Dependencies"]["channels"]|length %}
                         {% endif %}{% for inline in continuous_info["Dependencies"]["channels"] %}, {{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% if continuous_info["Dependencies"]["continuous"]|length %}
                         {% endif %}{% for inline in continuous_info["Dependencies"]["continuous"] %}, {{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %}
-                        , i_vals_{{continuous_name}}{{continuous_suffix}}, g_vals_{{continuous_name}}{{continuous_suffix}});
-
-    con_area_count = {{continuous_name}}{{continuous_suffix}}_con_area.size();
-    if(con_area_count > 0){
-        for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
-            std::size_t con_area = {{continuous_name}}{{continuous_suffix}}_con_area[con_area_index].first;
-            std::size_t next_con_area = {{continuous_name}}{{continuous_suffix}}_con_area[con_area_index+1].first;
-            int offset = {{continuous_name}}{{continuous_suffix}}_con_area[con_area_index].second;
-
-            #pragma omp simd
-            for(std::size_t cont_id = con_area; cont_id < next_con_area; cont_id++){
-                (*g_vals_comp)[cont_id+offset] += g_vals_{{continuous_name}}{{continuous_suffix}}[cont_id];
-                (*i_vals_comp)[cont_id+offset] += i_vals_{{continuous_name}}{{continuous_suffix}}[cont_id];
-            }
-        }
-
-        std::size_t con_area = {{continuous_name}}{{continuous_suffix}}_con_area[con_area_count-1].first;
-        int offset = {{continuous_name}}{{continuous_suffix}}_con_area[con_area_count-1].second;
-
-        #pragma omp simd
-        for(std::size_t cont_id = con_area; cont_id < {{continuous_name}}{{continuous_suffix}}.neuron_{{ continuous_name }}_continuous_input_count; cont_id++){
-            (*g_vals_comp)[cont_id+offset] += g_vals_{{continuous_name}}{{continuous_suffix}}[cont_id];
-            (*i_vals_comp)[cont_id+offset] += i_vals_{{continuous_name}}{{continuous_suffix}}[cont_id];
-        }
-    }
+                        , *i_vals_comp, *g_vals_comp);
     {% endfor -%}
   };
 

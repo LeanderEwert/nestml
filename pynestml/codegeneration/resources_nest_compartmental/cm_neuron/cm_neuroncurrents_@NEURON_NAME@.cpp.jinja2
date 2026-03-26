@@ -176,6 +176,8 @@ void nest::{{ion_channel_name}}{{cm_unique_suffix}}::new_channel(std::size_t com
     if(channel_contributing){
         neuron_{{ ion_channel_name }}_channel_count++;
         i_tot_{{ion_channel_name}}.push_back(0);
+        i_vals_{{ion_channel_name}}.push_back(0);
+        g_vals_{{ion_channel_name}}.push_back(0);
         compartment_association.push_back(comp_ass);
 
         {%- for pure_variable_name, variable_info in channel_info["States"].items() %}
@@ -253,6 +255,8 @@ void nest::{{ion_channel_name}}{{cm_unique_suffix}}::new_channel(std::size_t com
         neuron_{{ ion_channel_name }}_channel_count++;
         compartment_association.push_back(comp_ass);
         i_tot_{{ion_channel_name}}.push_back(0);
+        i_vals_{{ion_channel_name}}.push_back(0);
+        g_vals_{{ion_channel_name}}.push_back(0);
 
         {%- for pure_variable_name, variable_info in channel_info["States"].items() %}
         // state variable {{pure_variable_name }}
@@ -390,6 +394,18 @@ void nest::{{ion_channel_name}}{{cm_unique_suffix}}::pre_run_hook() {
   {%- endfor %}
   {%- endfor %}
     }
+
+    con_area.clear();
+    if(neuron_{{ ion_channel_name }}_channel_count){
+        int con_end_index = int(compartment_association[0]);
+        con_area.push_back(std::pair< std::size_t, int >(0, con_end_index));
+        for(std::size_t chan_id = 1; chan_id < neuron_{{ ion_channel_name }}_channel_count; chan_id++){
+            if(!(compartment_association[chan_id] == size_t(int(chan_id) + con_end_index))){
+                con_end_index = int(compartment_association[chan_id]) - int(chan_id);
+                con_area.push_back(std::pair< std::size_t, int >(chan_id, con_end_index));
+            }
+        }
+    }
 }
 
 void nest::{{ion_channel_name}}{{cm_unique_suffix}}::f_numstep(const std::vector< double >& shared_v_comp{% for ode in channel_info["Dependencies"]["concentrations"] %}, const std::vector< double >& shared_{{ode.lhs.name}}{% endfor %}{% if channel_info["Dependencies"]["receptors"]|length %}
@@ -461,9 +477,33 @@ void nest::{{ion_channel_name}}{{cm_unique_suffix}}::f_numstep(const std::vector
 
             // derivative
             double d_i_tot_dv = {{ vector_printer.print(inline_expression_d, "i", non_vec_vars) }};
-            g_val[i] = - d_i_tot_dv;
-            i_val[i] = i_tot_{{ion_channel_name}}[i] - d_i_tot_dv * v_comp;
+            g_vals_{{ion_channel_name}}[i] = -d_i_tot_dv;
+            i_vals_{{ion_channel_name}}[i] = i_tot_{{ion_channel_name}}[i] - d_i_tot_dv * v_comp;
         }
+
+    std::size_t con_area_count = con_area.size();
+    if(con_area_count > 0){
+        for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
+            std::size_t con_start = con_area[con_area_index].first;
+            std::size_t con_end = con_area[con_area_index+1].first;
+            int offset = con_area[con_area_index].second;
+
+            #pragma omp simd
+            for(std::size_t chan_id = con_start; chan_id < con_end; chan_id++){
+                g_val[chan_id + offset] += g_vals_{{ion_channel_name}}[chan_id];
+                i_val[chan_id + offset] += i_vals_{{ion_channel_name}}[chan_id];
+            }
+        }
+
+        std::size_t con_start = con_area[con_area_count-1].first;
+        int offset = con_area[con_area_count-1].second;
+
+        #pragma omp simd
+        for(std::size_t chan_id = con_start; chan_id < neuron_{{ ion_channel_name }}_channel_count; chan_id++){
+            g_val[chan_id + offset] += g_vals_{{ion_channel_name}}[chan_id];
+            i_val[chan_id + offset] += i_vals_{{ion_channel_name}}[chan_id];
+        }
+    }
     f_update();
 }
 
@@ -919,6 +959,8 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}::new_receptor(std::size_t comp_
 {
     neuron_{{ receptor_name }}_receptor_count++;
     i_tot_{{receptor_name}}.push_back(0);
+    i_vals_{{receptor_name}}.push_back(0);
+    g_vals_{{receptor_name}}.push_back(0);
     compartment_association.push_back(comp_ass);
     rec_idx.push_back(rec_index);
 
@@ -969,6 +1011,8 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}::new_receptor(std::size_t comp_
     neuron_{{ receptor_name }}_receptor_count++;
     compartment_association.push_back(comp_ass);
     i_tot_{{receptor_name}}.push_back(0);
+    i_vals_{{receptor_name}}.push_back(0);
+    g_vals_{{receptor_name}}.push_back(0);
     rec_idx.push_back(rec_index);
 
     {%- for pure_variable_name, variable_info in receptor_info["States"].items() %}
@@ -1097,6 +1141,18 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}::pre_run_hook()
 
   {{receptor_info["buffer_name"]}}_[i]->clear();
   }
+
+  con_area.clear();
+  if(neuron_{{ receptor_name }}_receptor_count){
+      int con_end_index = int(compartment_association[0]);
+      con_area.push_back(std::pair< std::size_t, int >(0, con_end_index));
+      for(std::size_t rec_id = 1; rec_id < neuron_{{ receptor_name }}_receptor_count; rec_id++){
+          if(!(compartment_association[rec_id] == size_t(int(rec_id) + con_end_index))){
+              con_end_index = int(compartment_association[rec_id]) - int(rec_id);
+              con_area.push_back(std::pair< std::size_t, int >(rec_id, con_end_index));
+          }
+      }
+  }
 }
 
 void nest::{{receptor_name}}{{cm_unique_suffix}}::f_numstep(const std::vector< double >& shared_v_comp, const long& lag {% for ode in receptor_info["Dependencies"]["concentrations"] %}, const std::vector< double >& shared_{{ode.lhs.name}}{% endfor %}{% if receptor_info["Dependencies"]["receptors"]|length %}
@@ -1180,8 +1236,32 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}::f_numstep(const std::vector< d
       double d_i_tot_dv = {{ vector_printer.print(receptor_info["inline_derivative"], "i", non_vec_vars) }};
 
       // for numerical integration
-      g_val[i] = - d_i_tot_dv;
-      i_val[i] = i_tot_{{receptor_name}}[i] - d_i_tot_dv * v_comp;
+      g_vals_{{receptor_name}}[i] = -d_i_tot_dv;
+      i_vals_{{receptor_name}}[i] = i_tot_{{receptor_name}}[i] - d_i_tot_dv * v_comp;
+  }
+
+  std::size_t con_area_count = con_area.size();
+  if(con_area_count > 0){
+      for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
+          std::size_t con_start = con_area[con_area_index].first;
+          std::size_t con_end = con_area[con_area_index+1].first;
+          int offset = con_area[con_area_index].second;
+
+          #pragma omp simd
+          for(std::size_t rec_id = con_start; rec_id < con_end; rec_id++){
+              g_val[rec_id + offset] += g_vals_{{receptor_name}}[rec_id];
+              i_val[rec_id + offset] += i_vals_{{receptor_name}}[rec_id];
+          }
+      }
+
+      std::size_t con_start = con_area[con_area_count-1].first;
+      int offset = con_area[con_area_count-1].second;
+
+      #pragma omp simd
+      for(std::size_t rec_id = con_start; rec_id < neuron_{{ receptor_name }}_receptor_count; rec_id++){
+          g_val[rec_id + offset] += g_vals_{{receptor_name}}[rec_id];
+          i_val[rec_id + offset] += i_vals_{{receptor_name}}[rec_id];
+      }
   }
 
   f_update();
@@ -1263,6 +1343,8 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::new_recep
 {
     neuron_{{ receptor_name }}_receptor_count++;
     i_tot_{{receptor_name}}.push_back(0);
+    i_vals_{{receptor_name}}.push_back(0);
+    g_vals_{{receptor_name}}.push_back(0);
     compartment_association.push_back(comp_ass);
     syn_idx.push_back(syn_index);
     delayed_spikes.push_back(TimerDeque(Time::get_resolution().get_ms()));
@@ -1357,6 +1439,8 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::new_recep
     neuron_{{ receptor_name }}_receptor_count++;
     compartment_association.push_back(comp_ass);
     i_tot_{{receptor_name}}.push_back(0);
+    i_vals_{{receptor_name}}.push_back(0);
+    g_vals_{{receptor_name}}.push_back(0);
     syn_idx.push_back(syn_index);
 
     if( receptor_params->known( "{{synapse_info["DelayVariable"]}}" ) )
@@ -1566,6 +1650,18 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::pre_run_h
 
   {{receptor_info["buffer_name"]}}_[i]->clear();
   }
+
+  con_area.clear();
+  if(neuron_{{ receptor_name }}_receptor_count){
+      int con_end_index = int(compartment_association[0]);
+      con_area.push_back(std::pair< std::size_t, int >(0, con_end_index));
+      for(std::size_t rec_id = 1; rec_id < neuron_{{ receptor_name }}_receptor_count; rec_id++){
+          if(!(compartment_association[rec_id] == size_t(int(rec_id) + con_end_index))){
+              con_end_index = int(compartment_association[rec_id]) - int(rec_id);
+              con_area.push_back(std::pair< std::size_t, int >(rec_id, con_end_index));
+          }
+      }
+  }
 }
 
 void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::postsynaptic_synaptic_processing(){
@@ -1730,9 +1826,33 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::f_numstep
       double d_i_tot_dv = {{ vector_printer.print(receptor_info["inline_derivative"], "i", non_vec_vars) }};
 
       // for numerical integration
-      g_val[i] = - d_i_tot_dv;
-      i_val[i] = i_tot_{{receptor_name}}[i] - d_i_tot_dv * v_comp;
+      g_vals_{{receptor_name}}[i] = -d_i_tot_dv;
+      i_vals_{{receptor_name}}[i] = i_tot_{{receptor_name}}[i] - d_i_tot_dv * v_comp;
     }
+
+  std::size_t con_area_count = con_area.size();
+  if(con_area_count > 0){
+      for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
+          std::size_t con_start = con_area[con_area_index].first;
+          std::size_t con_end = con_area[con_area_index+1].first;
+          int offset = con_area[con_area_index].second;
+
+          #pragma omp simd
+          for(std::size_t rec_id = con_start; rec_id < con_end; rec_id++){
+              g_val[rec_id + offset] += g_vals_{{receptor_name}}[rec_id];
+              i_val[rec_id + offset] += i_vals_{{receptor_name}}[rec_id];
+          }
+      }
+
+      std::size_t con_start = con_area[con_area_count-1].first;
+      int offset = con_area[con_area_count-1].second;
+
+      #pragma omp simd
+      for(std::size_t rec_id = con_start; rec_id < neuron_{{ receptor_name }}_receptor_count; rec_id++){
+          g_val[rec_id + offset] += g_vals_{{receptor_name}}[rec_id];
+          i_val[rec_id + offset] += i_vals_{{receptor_name}}[rec_id];
+      }
+  }
 
   f_update();
 }
@@ -1815,6 +1935,8 @@ void nest::{{continuous_name}}{{cm_unique_suffix}}::new_continuous_input(std::si
 {
     neuron_{{ continuous_name }}_continuous_input_count++;
     i_tot_{{continuous_name}}.push_back(0);
+    i_vals_{{continuous_name}}.push_back(0);
+    g_vals_{{continuous_name}}.push_back(0);
     compartment_association.push_back(comp_ass);
     continuous_idx.push_back(con_in_index);
 
@@ -1865,6 +1987,8 @@ void nest::{{continuous_name}}{{cm_unique_suffix}}::new_continuous_input(std::si
     neuron_{{ continuous_name }}_continuous_input_count++;
     compartment_association.push_back(comp_ass);
     i_tot_{{continuous_name}}.push_back(0);
+    i_vals_{{continuous_name}}.push_back(0);
+    g_vals_{{continuous_name}}.push_back(0);
     continuous_idx.push_back(con_in_index);
 
     {%- for pure_variable_name, variable_info in continuous_info["States"].items() %}
@@ -1984,6 +2108,18 @@ void nest::{{continuous_name}}{{cm_unique_suffix}}::pre_run_hook()
     {{port_name}}_[i]->clear();
     {% endfor %}
   }
+
+  con_area.clear();
+  if(neuron_{{ continuous_name }}_continuous_input_count){
+      int con_end_index = int(compartment_association[0]);
+      con_area.push_back(std::pair< std::size_t, int >(0, con_end_index));
+      for(std::size_t con_in_id = 1; con_in_id < neuron_{{ continuous_name }}_continuous_input_count; con_in_id++){
+          if(!(compartment_association[con_in_id] == size_t(int(con_in_id) + con_end_index))){
+              con_end_index = int(compartment_association[con_in_id]) - int(con_in_id);
+              con_area.push_back(std::pair< std::size_t, int >(con_in_id, con_end_index));
+          }
+      }
+  }
 }
 
 void nest::{{continuous_name}}{{cm_unique_suffix}}::f_numstep(const std::vector< double >& shared_v_comp, const long& lag {% for ode in continuous_info["Dependencies"]["concentrations"] %}, const std::vector< double >& shared_{{ode.lhs.name}}{% endfor %}{% if continuous_info["Dependencies"]["receptors"]|length %}
@@ -2069,8 +2205,32 @@ void nest::{{continuous_name}}{{cm_unique_suffix}}::f_numstep(const std::vector<
       double d_i_tot_dv = {{ vector_printer.print(continuous_info["inline_derivative"], "i", non_vec_vars) }};
 
       // for numerical integration
-      g_val[i] = - d_i_tot_dv;
-      i_val[i] = i_tot_{{continuous_name}}[i] - d_i_tot_dv * v_comp;
+      g_vals_{{continuous_name}}[i] = -d_i_tot_dv;
+      i_vals_{{continuous_name}}[i] = i_tot_{{continuous_name}}[i] - d_i_tot_dv * v_comp;
+  }
+
+  std::size_t con_area_count = con_area.size();
+  if(con_area_count > 0){
+      for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
+          std::size_t con_start = con_area[con_area_index].first;
+          std::size_t con_end = con_area[con_area_index+1].first;
+          int offset = con_area[con_area_index].second;
+
+          #pragma omp simd
+          for(std::size_t con_in_id = con_start; con_in_id < con_end; con_in_id++){
+              g_val[con_in_id + offset] += g_vals_{{continuous_name}}[con_in_id];
+              i_val[con_in_id + offset] += i_vals_{{continuous_name}}[con_in_id];
+          }
+      }
+
+      std::size_t con_start = con_area[con_area_count-1].first;
+      int offset = con_area[con_area_count-1].second;
+
+      #pragma omp simd
+      for(std::size_t con_in_id = con_start; con_in_id < neuron_{{ continuous_name }}_continuous_input_count; con_in_id++){
+          g_val[con_in_id + offset] += g_vals_{{continuous_name}}[con_in_id];
+          i_val[con_in_id + offset] += i_vals_{{continuous_name}}[con_in_id];
+      }
   }
 
   f_update();
