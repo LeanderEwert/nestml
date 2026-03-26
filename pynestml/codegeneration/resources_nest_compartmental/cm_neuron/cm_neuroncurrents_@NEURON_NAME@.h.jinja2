@@ -368,6 +368,7 @@ public:
   void append_recordables(std::map< Name, double* >* recordables, const long compartment_idx);
   void set_buffer_ptr( std::vector< RingBuffer >& rec_buffers )
   {
+    {{receptor_info["buffer_name"]}}_.clear();
     for(std::size_t i = 0; i < rec_idx.size(); i++){
         {{receptor_info["buffer_name"]}}_.push_back(&(rec_buffers[rec_idx[i]]));
     }
@@ -575,6 +576,7 @@ public:
   void append_recordables(std::map< Name, double* >* recordables, const long compartment_idx);
   void set_buffer_ptr( std::vector< RingBuffer >& syn_buffers )
   {
+    {{receptor_info["buffer_name"]}}_.clear();
     for(std::size_t i = 0; i < syn_idx.size(); i++){
         {{receptor_info["buffer_name"]}}_.push_back(&(syn_buffers[syn_idx[i]]));
     }
@@ -702,6 +704,9 @@ public:
   void append_recordables(std::map< Name, double* >* recordables, const long compartment_idx);
   void set_buffer_ptr( std::vector< RingBuffer >& continuous_buffers )
   {
+    {% for port_name, port_info in continuous_info["Continuous"].items() %}
+    {{port_name}}_.clear();
+    {% endfor %}
     for(std::size_t i = 0; i < continuous_idx.size(); i++){
         {% for port_name, port_info in continuous_info["Continuous"].items() %}
         {{port_name}}_.push_back(&(continuous_buffers[continuous_idx[i]]));
