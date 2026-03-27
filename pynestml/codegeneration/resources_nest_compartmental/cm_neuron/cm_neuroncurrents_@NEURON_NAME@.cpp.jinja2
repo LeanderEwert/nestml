@@ -524,16 +524,17 @@ void nest::{{ion_channel_name}}{{cm_unique_suffix}}::f_numstep(const std::vector
             i_val[chan_id + offset] += i_vals_{{ion_channel_name}}[chan_id];
         }
     }
+    {%- if channel_info["Blocks"] and channel_info["Blocks"]["UpdateBlock"] %}
     f_update();
+    {%- endif %}
 }
 
 void nest::{{ion_channel_name}}{{cm_unique_suffix}}::f_update()
 {
+    {%- if channel_info["Blocks"] and channel_info["Blocks"]["UpdateBlock"] %}
     {{ cm_scalar_t }} __resolution = Time::get_resolution().get_ms();
     #pragma omp simd
     for(std::size_t i = 0; i < neuron_{{ ion_channel_name }}_channel_count; i++){
-    {%- if channel_info["Blocks"] %}
-        {%- if channel_info["Blocks"]["UpdateBlock"] %}
         {%- set function = channel_info["Blocks"]["UpdateBlock"] %}
         {%-   filter indent(2,True) %}
         {%-   with ast = function.get_stmts_body() %}
@@ -541,17 +542,15 @@ void nest::{{ion_channel_name}}{{cm_unique_suffix}}::f_update()
         {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
         {%-   endwith %}
         {%-   endfilter %}
-        {%- endif %}
-    {%- endif %}
     }
+    {%- endif %}
 }
 
 void nest::{{ion_channel_name}}{{cm_unique_suffix}}::f_self_spike()
 {
+    {%- if channel_info["Blocks"] and channel_info["Blocks"]["SelfSpikesFunction"] %}
     {{ cm_scalar_t }} __resolution = Time::get_resolution().get_ms();
     for(std::size_t i = 0; i < neuron_{{ ion_channel_name }}_channel_count; i++){
-    {%- if channel_info["Blocks"] %}
-        {%- if channel_info["Blocks"]["SelfSpikesFunction"] %}
         {%- set function = channel_info["Blocks"]["SelfSpikesFunction"] %}
         {%-   filter indent(2,True) %}
         {%-   with ast = function.get_stmts_body() %}
@@ -559,9 +558,8 @@ void nest::{{ion_channel_name}}{{cm_unique_suffix}}::f_self_spike()
         {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
         {%-   endwith %}
         {%-   endfilter %}
-        {%- endif %}
-    {%- endif %}
     }
+    {%- endif %}
 }
 
 void nest::{{ion_channel_name}}{{cm_unique_suffix}}::get_currents_per_compartment(std::vector< {{ cm_scalar_t }} >& compartment_to_current){
@@ -906,15 +904,16 @@ void nest::{{ concentration_name }}{{cm_unique_suffix}}::f_numstep(const std::ve
         {%- endfor %}
         }
 
+    {%- if concentration_info["Blocks"] and concentration_info["Blocks"]["UpdateBlock"] %}
     f_update();
+    {%- endif %}
 }
 
 void nest::{{concentration_name}}{{cm_unique_suffix}}::f_update()
 {
+    {%- if concentration_info["Blocks"] and concentration_info["Blocks"]["UpdateBlock"] %}
     {{ cm_scalar_t }} __resolution = Time::get_resolution().get_ms();
     for(std::size_t i = 0; i < neuron_{{ concentration_name }}_concentration_count; i++){
-    {%- if concentration_info["Blocks"] %}
-        {%- if concentration_info["Blocks"]["UpdateBlock"] %}
         {%- set function = concentration_info["Blocks"]["UpdateBlock"] %}
         {%-   filter indent(2,True) %}
         {%-   with ast = function.get_stmts_body() %}
@@ -922,17 +921,15 @@ void nest::{{concentration_name}}{{cm_unique_suffix}}::f_update()
         {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
         {%-   endwith %}
         {%-   endfilter %}
-        {%- endif %}
-    {%- endif %}
     }
+    {%- endif %}
 }
 
 void nest::{{concentration_name}}{{cm_unique_suffix}}::f_self_spike()
 {
+    {%- if concentration_info["Blocks"] and concentration_info["Blocks"]["SelfSpikesFunction"] %}
     {{ cm_scalar_t }} __resolution = Time::get_resolution().get_ms();
     for(std::size_t i = 0; i < neuron_{{ concentration_name }}_concentration_count; i++){
-    {%- if concentration_info["Blocks"] %}
-        {%- if concentration_info["Blocks"]["SelfSpikesFunction"] %}
         {%- set function = concentration_info["Blocks"]["SelfSpikesFunction"] %}
         {%-   filter indent(2,True) %}
         {%-   with ast = function.get_stmts_body() %}
@@ -940,9 +937,8 @@ void nest::{{concentration_name}}{{cm_unique_suffix}}::f_self_spike()
         {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
         {%-   endwith %}
         {%-   endfilter %}
-        {%- endif %}
-    {%- endif %}
     }
+    {%- endif %}
 }
 
 {%- for function in concentration_info["Functions"] %}
@@ -1284,15 +1280,16 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}::f_numstep(const std::vector< {
       }
   }
 
+  {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["UpdateBlock"] %}
   f_update();
+  {%- endif %}
 }
 
 void nest::{{receptor_name}}{{cm_unique_suffix}}::f_update()
 {
+    {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["UpdateBlock"] %}
     {{ cm_scalar_t }} __resolution = Time::get_resolution().get_ms();
     for(std::size_t i = 0; i < neuron_{{ receptor_name }}_receptor_count; i++){
-    {%- if receptor_info["Blocks"] %}
-        {%- if receptor_info["Blocks"]["UpdateBlock"] %}
         {%- set function = receptor_info["Blocks"]["UpdateBlock"] %}
         {%-   filter indent(2,True) %}
         {%-   with ast = function.get_stmts_body() %}
@@ -1300,17 +1297,15 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}::f_update()
         {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
         {%-   endwith %}
         {%-   endfilter %}
-        {%- endif %}
-    {%- endif %}
     }
+    {%- endif %}
 }
 
 void nest::{{receptor_name}}{{cm_unique_suffix}}::f_self_spike()
 {
+    {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["SelfSpikesFunction"] %}
     {{ cm_scalar_t }} __resolution = Time::get_resolution().get_ms();
     for(std::size_t i = 0; i < neuron_{{ receptor_name }}_receptor_count; i++){
-    {%- if receptor_info["Blocks"] %}
-        {%- if receptor_info["Blocks"]["SelfSpikesFunction"] %}
         {%- set function = receptor_info["Blocks"]["SelfSpikesFunction"] %}
         {%-   filter indent(2,True) %}
         {%-   with ast = function.get_stmts_body() %}
@@ -1318,9 +1313,8 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}::f_self_spike()
         {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
         {%-   endwith %}
         {%-   endfilter %}
-        {%- endif %}
-    {%- endif %}
     }
+    {%- endif %}
 }
 
 {%- for function in receptor_info["functions_used"] %}
@@ -1874,15 +1868,16 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::f_numstep
       }
   }
 
+  {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["UpdateBlock"] %}
   f_update();
+  {%- endif %}
 }
 
 void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::f_update()
 {
+    {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["UpdateBlock"] %}
     {{ cm_scalar_t }} __resolution = Time::get_resolution().get_ms();
     for(std::size_t i = 0; i < neuron_{{ receptor_name }}_receptor_count; i++){
-    {%- if receptor_info["Blocks"] %}
-        {%- if receptor_info["Blocks"]["UpdateBlock"] %}
         {%- set function = receptor_info["Blocks"]["UpdateBlock"] %}
         {%-   filter indent(2,True) %}
         {%-   with ast = function.get_stmts_body() %}
@@ -1890,17 +1885,15 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::f_update(
         {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
         {%-   endwith %}
         {%-   endfilter %}
-        {%- endif %}
-    {%- endif %}
     }
+    {%- endif %}
 }
 
 void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::f_self_spike()
 {
+    {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["SelfSpikesFunction"] %}
     {{ cm_scalar_t }} __resolution = Time::get_resolution().get_ms();
     for(std::size_t i = 0; i < neuron_{{ receptor_name }}_receptor_count; i++){
-    {%- if receptor_info["Blocks"] %}
-        {%- if receptor_info["Blocks"]["SelfSpikesFunction"] %}
         {%- set function = receptor_info["Blocks"]["SelfSpikesFunction"] %}
         {%-   filter indent(2,True) %}
         {%-   with ast = function.get_stmts_body() %}
@@ -1908,9 +1901,8 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::f_self_sp
         {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
         {%-   endwith %}
         {%-   endfilter %}
-        {%- endif %}
-    {%- endif %}
     }
+    {%- endif %}
 }
 
 {%- for function in receptor_info["functions_used"] %}
@@ -2253,15 +2245,16 @@ void nest::{{continuous_name}}{{cm_unique_suffix}}::f_numstep(const std::vector<
       }
   }
 
+  {%- if continuous_info["Blocks"] and continuous_info["Blocks"]["UpdateBlock"] %}
   f_update();
+  {%- endif %}
 }
 
 void nest::{{continuous_name}}{{cm_unique_suffix}}::f_update()
 {
+    {%- if continuous_info["Blocks"] and continuous_info["Blocks"]["UpdateBlock"] %}
     {{ cm_scalar_t }} __resolution = Time::get_resolution().get_ms();
     for(std::size_t i = 0; i < neuron_{{ continuous_name }}_continuous_input_count; i++){
-    {%- if continuous_info["Blocks"] %}
-        {%- if continuous_info["Blocks"]["UpdateBlock"] %}
         {%- set function = continuous_info["Blocks"]["UpdateBlock"] %}
         {%-   filter indent(2,True) %}
         {%-   with ast = function.get_stmts_body() %}
@@ -2269,17 +2262,15 @@ void nest::{{continuous_name}}{{cm_unique_suffix}}::f_update()
         {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
         {%-   endwith %}
         {%-   endfilter %}
-        {%- endif %}
-    {%- endif %}
     }
+    {%- endif %}
 }
 
 void nest::{{continuous_name}}{{cm_unique_suffix}}::f_self_spike()
 {
+    {%- if continuous_info["Blocks"] and continuous_info["Blocks"]["SelfSpikesFunction"] %}
     {{ cm_scalar_t }} __resolution = Time::get_resolution().get_ms();
     for(std::size_t i = 0; i < neuron_{{ continuous_name }}_continuous_input_count; i++){
-    {%- if continuous_info["Blocks"] %}
-        {%- if continuous_info["Blocks"]["SelfSpikesFunction"] %}
         {%- set function = continuous_info["Blocks"]["SelfSpikesFunction"] %}
         {%-   filter indent(2,True) %}
         {%-   with ast = function.get_stmts_body() %}
@@ -2287,9 +2278,8 @@ void nest::{{continuous_name}}{{cm_unique_suffix}}::f_self_spike()
         {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
         {%-   endwith %}
         {%-   endfilter %}
-        {%- endif %}
-    {%- endif %}
     }
+    {%- endif %}
 }
 
 {%- for function in continuous_info["Functions"] %}

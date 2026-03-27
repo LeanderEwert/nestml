@@ -1236,24 +1236,142 @@ public:
     std::fill(i_vals_comp->begin(), i_vals_comp->end(), 0.0);
 
 {%- for receptor_name, receptor_info in recs_info.items() %}
+    {%- set dep = namespace(needed=false) %}
+    {%- for concentration_name, concentration_info in conc_info.items() %}
+      {%- for inline in concentration_info["Dependencies"]["receptors"] %}
+        {%- if inline.variable_name == receptor_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for ion_channel_name, channel_info in chan_info.items() %}
+      {%- for inline in channel_info["Dependencies"]["receptors"] %}
+        {%- if inline.variable_name == receptor_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for receptor_nm, receptor_dep_info in recs_info.items() %}
+      {%- for inline in receptor_dep_info["Dependencies"]["receptors"] %}
+        {%- if inline.variable_name == receptor_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for receptor_nm, receptor_dep_info in recs_info.items() %}
+      {%- for synapse_name, synapse_info in syns_info.items() %}
+        {%- for inline in synapse_info["Dependencies"]["receptors"] %}
+          {%- if inline.variable_name == receptor_name %}{% set dep.needed = true %}{% endif %}
+        {%- endfor %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for continuous_name, continuous_info in con_in_info.items() %}
+      {%- for inline in continuous_info["Dependencies"]["receptors"] %}
+        {%- if inline.variable_name == receptor_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- if dep.needed %}
     {{receptor_name}}{{receptor_suffix}}.get_currents_per_compartment({{receptor_name}}{{receptor_suffix}}_shared_current);
-{% endfor %}
-{%- for receptor_name, receptor_info in recs_info.items() %}
-    {%- for synapse_name, synapse_info in syns_info.items() %}
+      {%- for synapse_name, synapse_info in syns_info.items() %}
     {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.get_currents_per_compartment({{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current);
     for(size_t i = 0; i < {{receptor_name}}{{receptor_suffix}}_shared_current.size(); i++){
         {{receptor_name}}{{receptor_suffix}}_shared_current[i] += {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current[i];
     }
-    {% endfor %}
+      {% endfor %}
+    {%- endif %}
 {% endfor %}
 {%- for continuous_name, continuous_info in con_in_info.items() %}
+    {%- set dep = namespace(needed=false) %}
+    {%- for concentration_name, concentration_info in conc_info.items() %}
+      {%- for inline in concentration_info["Dependencies"]["continuous"] %}
+        {%- if inline.variable_name == continuous_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for ion_channel_name, channel_info in chan_info.items() %}
+      {%- for inline in channel_info["Dependencies"]["continuous"] %}
+        {%- if inline.variable_name == continuous_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+      {%- for inline in receptor_info["Dependencies"]["continuous"] %}
+        {%- if inline.variable_name == continuous_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+      {%- for synapse_name, synapse_info in syns_info.items() %}
+        {%- for inline in synapse_info["Dependencies"]["continuous"] %}
+          {%- if inline.variable_name == continuous_name %}{% set dep.needed = true %}{% endif %}
+        {%- endfor %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for continuous_dep_name, continuous_dep_info in con_in_info.items() %}
+      {%- for inline in continuous_dep_info["Dependencies"]["continuous"] %}
+        {%- if inline.variable_name == continuous_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- if dep.needed %}
     {{continuous_name}}{{continuous_suffix}}.get_currents_per_compartment({{continuous_name}}{{continuous_suffix}}_shared_current);
+    {%- endif %}
 {% endfor %}
 {%- for concentration_name, concentration_info in conc_info.items() %}
+    {%- set dep = namespace(needed=false) %}
+    {%- for concentration_dep_name, concentration_dep_info in conc_info.items() %}
+      {%- for ode in concentration_dep_info["Dependencies"]["concentrations"] %}
+        {%- if ode.lhs.name == concentration_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for ion_channel_name, channel_info in chan_info.items() %}
+      {%- for ode in channel_info["Dependencies"]["concentrations"] %}
+        {%- if ode.lhs.name == concentration_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+      {%- for ode in receptor_info["Dependencies"]["concentrations"] %}
+        {%- if ode.lhs.name == concentration_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+      {%- for synapse_name, synapse_info in syns_info.items() %}
+        {%- for ode in synapse_info["Dependencies"]["concentrations"] %}
+          {%- if ode.lhs.name == concentration_name %}{% set dep.needed = true %}{% endif %}
+        {%- endfor %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for continuous_name, continuous_info in con_in_info.items() %}
+      {%- for ode in continuous_info["Dependencies"]["concentrations"] %}
+        {%- if ode.lhs.name == concentration_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- if dep.needed %}
     {{ concentration_name }}{{concentration_suffix}}.get_concentrations_per_compartment({{concentration_name}}{{concentration_suffix}}_shared_concentration);
+    {%- endif %}
 {% endfor -%}
 {%- for ion_channel_name, channel_info in chan_info.items() %}
+    {%- set dep = namespace(needed=false) %}
+    {%- for concentration_name, concentration_info in conc_info.items() %}
+      {%- for inline in concentration_info["Dependencies"]["channels"] %}
+        {%- if inline.variable_name == ion_channel_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for ion_channel_dep_name, channel_dep_info in chan_info.items() %}
+      {%- for inline in channel_dep_info["Dependencies"]["channels"] %}
+        {%- if inline.variable_name == ion_channel_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+      {%- for inline in receptor_info["Dependencies"]["channels"] %}
+        {%- if inline.variable_name == ion_channel_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+      {%- for synapse_name, synapse_info in syns_info.items() %}
+        {%- for inline in synapse_info["Dependencies"]["channels"] %}
+          {%- if inline.variable_name == ion_channel_name %}{% set dep.needed = true %}{% endif %}
+        {%- endfor %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- for continuous_name, continuous_info in con_in_info.items() %}
+      {%- for inline in continuous_info["Dependencies"]["channels"] %}
+        {%- if inline.variable_name == ion_channel_name %}{% set dep.needed = true %}{% endif %}
+      {%- endfor %}
+    {%- endfor %}
+    {%- if dep.needed %}
     {{ion_channel_name}}{{channel_suffix}}.get_currents_per_compartment({{ion_channel_name}}{{channel_suffix}}_shared_current);
+    {%- endif %}
 {% endfor -%}
 
     {%- for concentration_name, concentration_info in conc_info.items() %}
@@ -1316,18 +1434,28 @@ public:
     {%- for receptor_name, receptor_info in recs_info.items() %}
         {%- for synapse_name, synapse_info in syns_info.items() %}
     {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.postsynaptic_synaptic_processing();
+    {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["SelfSpikesFunction"] %}
     {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.f_self_spike();
+    {%- endif %}
         {% endfor -%}
+    {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["SelfSpikesFunction"] %}
     {{receptor_name}}{{receptor_suffix}}.f_self_spike();
+    {%- endif %}
     {% endfor -%}
     {%- for ion_channel_name, channel_info in chan_info.items() %}
+    {%- if channel_info["Blocks"] and channel_info["Blocks"]["SelfSpikesFunction"] %}
     {{ion_channel_name}}{{channel_suffix}}.f_self_spike();
+    {%- endif %}
     {% endfor -%}
     {%- for concentration_name, concentration_info in conc_info.items() %}
+    {%- if concentration_info["Blocks"] and concentration_info["Blocks"]["SelfSpikesFunction"] %}
     {{concentration_name}}{{concentration_suffix}}.f_self_spike();
+    {%- endif %}
     {% endfor -%}
     {%- for continuous_name, continuous_info in con_in_info.items() %}
+    {%- if continuous_info["Blocks"] and continuous_info["Blocks"]["SelfSpikesFunction"] %}
     {{continuous_name}}{{continuous_suffix}}.f_self_spike();
+    {%- endif %}
     {% endfor -%}
 {%- if fp_precision == "single" %}
     update_recordable_mirrors();

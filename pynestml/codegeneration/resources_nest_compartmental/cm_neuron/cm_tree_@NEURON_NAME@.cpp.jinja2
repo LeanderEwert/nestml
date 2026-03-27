@@ -691,8 +691,6 @@ void nest::CompTree{{cm_unique_suffix}}::create_tree_data_soa_by_sweeping_order(
         }
     }
 
-    sweep_xx_.assign(n_comp, 0.0);
-    sweep_yy_.assign(n_comp, 0.0);
     sweep_g_out_.assign(n_comp, 0.0);
     sweep_f_out_.assign(n_comp, 0.0);
 }
@@ -700,11 +698,6 @@ void nest::CompTree{{cm_unique_suffix}}::create_tree_data_soa_by_sweeping_order(
 void
 nest::CompTree{{cm_unique_suffix}}::solve_matrix_downsweep()
 {
-    std::fill(sweep_xx_.begin(), sweep_xx_.end(), 0.0);
-    std::fill(sweep_yy_.begin(), sweep_yy_.end(), 0.0);
-    std::fill(sweep_g_out_.begin(), sweep_g_out_.end(), 0.0);
-    std::fill(sweep_f_out_.begin(), sweep_f_out_.end(), 0.0);
-
     // Base level (leaf compartments): no child accumulation, but their io()
     // outputs are needed by the next level.
     if(!sweeping_order_idx_.empty()){
@@ -734,8 +727,6 @@ nest::CompTree{{cm_unique_suffix}}::solve_matrix_downsweep()
                 yy += sweep_f_out_[child_id];
             }
 
-            sweep_xx_[comp_id] = xx;
-            sweep_yy_[comp_id] = yy;
             gg_vec[comp_id] -= xx;
             ff_vec[comp_id] -= yy;
 
