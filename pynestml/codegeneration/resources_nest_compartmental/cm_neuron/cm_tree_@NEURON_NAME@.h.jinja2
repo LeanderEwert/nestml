@@ -207,6 +207,16 @@ private:
   std::vector< double > ff_vec;
 
   std::vector< std::vector< Compartment{{cm_unique_suffix}}* > > sweeping_order;
+  std::vector< std::vector< std::size_t > > sweeping_order_idx_;
+  std::vector< std::size_t > parent_idx_;
+  std::vector< bool > has_parent_;
+  std::vector< double > hh_vec_;
+  std::vector< std::size_t > child_offsets_;
+  std::vector< std::size_t > child_indices_;
+  std::vector< double > sweep_xx_;
+  std::vector< double > sweep_yy_;
+  std::vector< double > sweep_g_out_;
+  std::vector< double > sweep_f_out_;
 
 public:
   // constructor, destructor
