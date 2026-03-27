@@ -101,7 +101,7 @@ class TestCompartmentalConcmech:
 
         nest.Connect(mm, cm)
 
-        nest.Simulate(110.)
+        nest.Simulate(220.)
 
         res = nest.GetStatus(mm, 'events')[0]
 
