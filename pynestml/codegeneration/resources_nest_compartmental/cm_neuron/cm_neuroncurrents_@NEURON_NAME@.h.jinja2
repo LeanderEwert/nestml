@@ -1239,29 +1239,29 @@ public:
     {%- set dep = namespace(needed=false) %}
     {%- for concentration_name, concentration_info in conc_info.items() %}
       {%- for inline in concentration_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}{% set dep.needed = true %}{% endif %}
+        {%- if inline.variable_name == receptor_name or inline.variable_name == receptor_name ~ receptor_suffix %}{% set dep.needed = true %}{% endif %}
       {%- endfor %}
     {%- endfor %}
     {%- for ion_channel_name, channel_info in chan_info.items() %}
       {%- for inline in channel_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}{% set dep.needed = true %}{% endif %}
+        {%- if inline.variable_name == receptor_name or inline.variable_name == receptor_name ~ receptor_suffix %}{% set dep.needed = true %}{% endif %}
       {%- endfor %}
     {%- endfor %}
     {%- for receptor_nm, receptor_dep_info in recs_info.items() %}
       {%- for inline in receptor_dep_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}{% set dep.needed = true %}{% endif %}
+        {%- if inline.variable_name == receptor_name or inline.variable_name == receptor_name ~ receptor_suffix %}{% set dep.needed = true %}{% endif %}
       {%- endfor %}
     {%- endfor %}
     {%- for receptor_nm, receptor_dep_info in recs_info.items() %}
       {%- for synapse_name, synapse_info in syns_info.items() %}
         {%- for inline in synapse_info["Dependencies"]["receptors"] %}
-          {%- if inline.variable_name == receptor_name %}{% set dep.needed = true %}{% endif %}
+          {%- if inline.variable_name == receptor_name or inline.variable_name == receptor_name ~ receptor_suffix %}{% set dep.needed = true %}{% endif %}
         {%- endfor %}
       {%- endfor %}
     {%- endfor %}
     {%- for continuous_name, continuous_info in con_in_info.items() %}
       {%- for inline in continuous_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}{% set dep.needed = true %}{% endif %}
+        {%- if inline.variable_name == receptor_name or inline.variable_name == receptor_name ~ receptor_suffix %}{% set dep.needed = true %}{% endif %}
       {%- endfor %}
     {%- endfor %}
     {%- if dep.needed %}
@@ -1278,29 +1278,29 @@ public:
     {%- set dep = namespace(needed=false) %}
     {%- for concentration_name, concentration_info in conc_info.items() %}
       {%- for inline in concentration_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}{% set dep.needed = true %}{% endif %}
+        {%- if inline.variable_name == continuous_name or inline.variable_name == continuous_name ~ continuous_suffix %}{% set dep.needed = true %}{% endif %}
       {%- endfor %}
     {%- endfor %}
     {%- for ion_channel_name, channel_info in chan_info.items() %}
       {%- for inline in channel_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}{% set dep.needed = true %}{% endif %}
+        {%- if inline.variable_name == continuous_name or inline.variable_name == continuous_name ~ continuous_suffix %}{% set dep.needed = true %}{% endif %}
       {%- endfor %}
     {%- endfor %}
     {%- for receptor_name, receptor_info in recs_info.items() %}
       {%- for inline in receptor_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}{% set dep.needed = true %}{% endif %}
+        {%- if inline.variable_name == continuous_name or inline.variable_name == continuous_name ~ continuous_suffix %}{% set dep.needed = true %}{% endif %}
       {%- endfor %}
     {%- endfor %}
     {%- for receptor_name, receptor_info in recs_info.items() %}
       {%- for synapse_name, synapse_info in syns_info.items() %}
         {%- for inline in synapse_info["Dependencies"]["continuous"] %}
-          {%- if inline.variable_name == continuous_name %}{% set dep.needed = true %}{% endif %}
+          {%- if inline.variable_name == continuous_name or inline.variable_name == continuous_name ~ continuous_suffix %}{% set dep.needed = true %}{% endif %}
         {%- endfor %}
       {%- endfor %}
     {%- endfor %}
     {%- for continuous_dep_name, continuous_dep_info in con_in_info.items() %}
       {%- for inline in continuous_dep_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}{% set dep.needed = true %}{% endif %}
+        {%- if inline.variable_name == continuous_name or inline.variable_name == continuous_name ~ continuous_suffix %}{% set dep.needed = true %}{% endif %}
       {%- endfor %}
     {%- endfor %}
     {%- if dep.needed %}
@@ -1344,29 +1344,29 @@ public:
     {%- set dep = namespace(needed=false) %}
     {%- for concentration_name, concentration_info in conc_info.items() %}
       {%- for inline in concentration_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}{% set dep.needed = true %}{% endif %}
+        {%- if inline.variable_name == ion_channel_name or inline.variable_name == ion_channel_name ~ channel_suffix %}{% set dep.needed = true %}{% endif %}
       {%- endfor %}
     {%- endfor %}
     {%- for ion_channel_dep_name, channel_dep_info in chan_info.items() %}
       {%- for inline in channel_dep_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}{% set dep.needed = true %}{% endif %}
+        {%- if inline.variable_name == ion_channel_name or inline.variable_name == ion_channel_name ~ channel_suffix %}{% set dep.needed = true %}{% endif %}
       {%- endfor %}
     {%- endfor %}
     {%- for receptor_name, receptor_info in recs_info.items() %}
       {%- for inline in receptor_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}{% set dep.needed = true %}{% endif %}
+        {%- if inline.variable_name == ion_channel_name or inline.variable_name == ion_channel_name ~ channel_suffix %}{% set dep.needed = true %}{% endif %}
       {%- endfor %}
     {%- endfor %}
     {%- for receptor_name, receptor_info in recs_info.items() %}
       {%- for synapse_name, synapse_info in syns_info.items() %}
         {%- for inline in synapse_info["Dependencies"]["channels"] %}
-          {%- if inline.variable_name == ion_channel_name %}{% set dep.needed = true %}{% endif %}
+          {%- if inline.variable_name == ion_channel_name or inline.variable_name == ion_channel_name ~ channel_suffix %}{% set dep.needed = true %}{% endif %}
         {%- endfor %}
       {%- endfor %}
     {%- endfor %}
     {%- for continuous_name, continuous_info in con_in_info.items() %}
       {%- for inline in continuous_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}{% set dep.needed = true %}{% endif %}
+        {%- if inline.variable_name == ion_channel_name or inline.variable_name == ion_channel_name ~ channel_suffix %}{% set dep.needed = true %}{% endif %}
       {%- endfor %}
     {%- endfor %}
     {%- if dep.needed %}
