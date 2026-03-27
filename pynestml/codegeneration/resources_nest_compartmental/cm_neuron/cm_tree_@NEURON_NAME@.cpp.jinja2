@@ -1,3 +1,4 @@
+{%- set cm_scalar_t = "float" if fp_precision == "single" else "double" -%}
 /*
  *  cm_tree.cpp
  *
@@ -28,7 +29,10 @@ nest::Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const lo
   , comp_index( compartment_index )
   , p_index( parent_index )
   , parent( nullptr )
-  , v_comp( new double(0.0) )
+  , v_comp( new {{ cm_scalar_t }}(0.0) )
+{%- if fp_precision == "single" %}
+  , v_comp_recordable_( 0.0 )
+{%- endif %}
   , ca( 1.0 )
   , gc( 0.01 )
   , gl( 0.1 )
@@ -42,16 +46,22 @@ nest::Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const lo
   , n_passed( 0 )
 {
   *v_comp = el;
+{%- if fp_precision == "single" %}
+  v_comp_recordable_ = static_cast< double >( *v_comp );
+{%- endif %}
 }
 
 nest::Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index,
-    double* v_comp_ref, double* ca__div__dt_ref, double* gl__times__el_ref, double* gg0_ref, double* gg_ref, double* ff_ref )
+    {{ cm_scalar_t }}* v_comp_ref, {{ cm_scalar_t }}* ca__div__dt_ref, {{ cm_scalar_t }}* gl__times__el_ref, {{ cm_scalar_t }}* gg0_ref, {{ cm_scalar_t }}* gg_ref, {{ cm_scalar_t }}* ff_ref )
   : xx_( 0.0 )
   , yy_( 0.0 )
   , comp_index( compartment_index )
   , p_index( parent_index )
   , parent( nullptr )
   , v_comp( v_comp_ref )
+{%- if fp_precision == "single" %}
+  , v_comp_recordable_( 0.0 )
+{%- endif %}
   , ca( 1.0 )
   , gc( 0.01 )
   , gl( 0.1 )
@@ -65,17 +75,23 @@ nest::Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const lo
   , n_passed( 0 )
 {
   *v_comp = el;
+{%- if fp_precision == "single" %}
+  v_comp_recordable_ = static_cast< double >( *v_comp );
+{%- endif %}
 }
 nest::Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const long compartment_index,
   const long parent_index,
   const DictionaryDatum& compartment_params,
-  double* v_comp_ref, double* ca__div__dt_ref, double* gl__times__el_ref, double* gg0_ref, double* gg_ref, double* ff_ref)
+  {{ cm_scalar_t }}* v_comp_ref, {{ cm_scalar_t }}* ca__div__dt_ref, {{ cm_scalar_t }}* gl__times__el_ref, {{ cm_scalar_t }}* gg0_ref, {{ cm_scalar_t }}* gg_ref, {{ cm_scalar_t }}* ff_ref)
   : xx_( 0.0 )
   , yy_( 0.0 )
   , comp_index( compartment_index )
   , p_index( parent_index )
   , parent( nullptr )
   , v_comp( v_comp_ref )
+{%- if fp_precision == "single" %}
+  , v_comp_recordable_( 0.0 )
+{%- endif %}
   , ca( 1.0 )
   , gc( 0.01 )
   , gl( 0.1 )
@@ -93,10 +109,13 @@ nest::Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const lo
   updateValue< double >( compartment_params, names::g_C, gc );
   updateValue< double >( compartment_params, names::g_L, gl );
   updateValue< double >( compartment_params, names::e_L, el );
-  double v_comp_update = el;
+  {{ cm_scalar_t }} v_comp_update = el;
   if( compartment_params->known( "v_comp" ) ) updateValue< double >( compartment_params, "v_comp", v_comp_update);
 
   *v_comp = v_comp_update;
+{%- if fp_precision == "single" %}
+  v_comp_recordable_ = static_cast< double >( *v_comp );
+{%- endif %}
 }
 
 void
@@ -107,7 +126,7 @@ nest::Compartment{{cm_unique_suffix}}::pre_run_hook()
 {%- endif %}
 {
 
-  const double dt = Time::get_resolution().get_ms();
+  const {{ cm_scalar_t }} dt = Time::get_resolution().get_ms();
   // used in vectorized passive loop
   *ca__div__dt = ca / dt;
   *gl__times__el = gl * el;
@@ -119,7 +138,12 @@ nest::Compartment{{cm_unique_suffix}}::get_recordables()
 {
   std::map< Name, double* > recordables;
 
+{%- if fp_precision == "single" %}
+  v_comp_recordable_ = static_cast< double >( *v_comp );
+  recordables[ Name( "v_comp" + std::to_string( comp_index ) ) ] = &v_comp_recordable_;
+{%- else %}
   recordables[ Name( "v_comp" + std::to_string( comp_index ) ) ] = v_comp;
+{%- endif %}
 
   return recordables;
 }
@@ -142,7 +166,7 @@ nest::Compartment{{cm_unique_suffix}}::construct_matrix_coupling_elements()
 }
 
 
-nest::CompTree{{cm_unique_suffix}}::CompTree{{cm_unique_suffix}}(bool* self_spikes, std::vector< double >* g_vals_in, std::vector< double >* i_vals_in)
+nest::CompTree{{cm_unique_suffix}}::CompTree{{cm_unique_suffix}}(bool* self_spikes, std::vector< {{ cm_scalar_t }} >* g_vals_in, std::vector< {{ cm_scalar_t }} >* i_vals_in)
   : root_( -1, -1 )
   , size_( 0 )
   , g_vals(g_vals_in)
@@ -382,7 +406,7 @@ nest::CompTree{{cm_unique_suffix}}::get_compartment_opt( const long compartment_
  * Initialize all tree structure pointers
  */
 void
-nest::CompTree{{cm_unique_suffix}}::init_pointers(bool* self_spikes, std::vector< double >* g_vals_in, std::vector< double >* i_vals_in)
+nest::CompTree{{cm_unique_suffix}}::init_pointers(bool* self_spikes, std::vector< {{ cm_scalar_t }} >* g_vals_in, std::vector< {{ cm_scalar_t }} >* i_vals_in)
 {
   set_parents();
   set_compartments();
@@ -531,7 +555,7 @@ nest::CompTree{{cm_unique_suffix}}::pre_run_hook()
 /**
  * Returns vector of voltage values, indices correspond to compartments in `compartments_`
  */
-std::vector< double >
+std::vector< {{ cm_scalar_t }} >
 nest::CompTree{{cm_unique_suffix}}::get_voltage() const
 {
   return v_comp_vec;
@@ -540,7 +564,7 @@ nest::CompTree{{cm_unique_suffix}}::get_voltage() const
 /**
  * Return voltage of single compartment voltage, indicated by the compartment_index
  */
-double
+{{ cm_scalar_t }}
 nest::CompTree{{cm_unique_suffix}}::get_compartment_voltage( const long compartment_index )
 {
   return *(compartments_[ compartment_index ]->v_comp);
@@ -583,7 +607,22 @@ nest::CompTree{{cm_unique_suffix}}::solve_matrix()
 
   // do up sweep to set voltages
   solve_matrix_upsweep();
+
+{%- if fp_precision == "single" %}
+  sync_voltage_recordables();
+{%- endif %}
 }
+
+{%- if fp_precision == "single" %}
+void
+nest::CompTree{{cm_unique_suffix}}::sync_voltage_recordables()
+{
+  for ( auto compartment_it = compartments_.begin(); compartment_it != compartments_.end(); ++compartment_it )
+  {
+    ( *compartment_it )->sync_recordables();
+  }
+}
+{%- endif %}
 
 void nest::CompTree{{cm_unique_suffix}}::compute_sweeping_order( std::vector< Compartment{{cm_unique_suffix}}* > parallel_comps )
 {
@@ -674,7 +713,7 @@ nest::CompTree{{cm_unique_suffix}}::solve_matrix_downsweep()
         for(std::size_t i = 0; i < leaf_level.size(); i++){
             const std::size_t comp_id = leaf_level[i];
             if(has_parent_[comp_id]){
-                const double hh = hh_vec_[comp_id];
+                const {{ cm_scalar_t }} hh = hh_vec_[comp_id];
                 sweep_g_out_[comp_id] = hh * hh / gg_vec[comp_id];
                 sweep_f_out_[comp_id] = ff_vec[comp_id] * hh / gg_vec[comp_id];
             }
@@ -686,8 +725,8 @@ nest::CompTree{{cm_unique_suffix}}::solve_matrix_downsweep()
         #pragma omp simd
         for(std::size_t i = 0; i < sweep_level.size(); i++){
             const std::size_t comp_id = sweep_level[i];
-            double xx = 0.0;
-            double yy = 0.0;
+            {{ cm_scalar_t }} xx = 0.0;
+            {{ cm_scalar_t }} yy = 0.0;
 
             for(std::size_t idx = child_offsets_[comp_id]; idx < child_offsets_[comp_id + 1]; idx++){
                 const std::size_t child_id = child_indices_[idx];
@@ -701,7 +740,7 @@ nest::CompTree{{cm_unique_suffix}}::solve_matrix_downsweep()
             ff_vec[comp_id] -= yy;
 
             if(has_parent_[comp_id]){
-                const double hh = hh_vec_[comp_id];
+                const {{ cm_scalar_t }} hh = hh_vec_[comp_id];
                 sweep_g_out_[comp_id] = hh * hh / gg_vec[comp_id];
                 sweep_f_out_[comp_id] = ff_vec[comp_id] * hh / gg_vec[comp_id];
             }
@@ -721,7 +760,7 @@ nest::CompTree{{cm_unique_suffix}}::solve_matrix_upsweep()
         for(std::size_t i = 0; i < sweep_level.size(); i++){
             const std::size_t comp_id = sweep_level[i];
             const std::size_t parent_id = parent_idx_[comp_id];
-            const double vv_parent = v_comp_vec[parent_id];
+            const {{ cm_scalar_t }} vv_parent = v_comp_vec[parent_id];
             v_comp_vec[comp_id] = (ff_vec[comp_id] - vv_parent * hh_vec_[comp_id]) / gg_vec[comp_id];
         }
     }

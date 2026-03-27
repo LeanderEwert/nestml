@@ -108,6 +108,8 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
         "neuron_synapse_pairs": [],
         "neuron_models": [],
         "synapse_models": [],
+        "fp_precision": "double",
+        "use_fastexp": False,
         "neuron_parent_class": "ArchivingNode",
         "neuron_parent_class_include": "archiving_node.h",
         "preserve_expressions": True,
@@ -118,6 +120,7 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
                 "neuron": [
                     "cm_neuroncurrents_@NEURON_NAME@.cpp.jinja2",
                     "cm_neuroncurrents_@NEURON_NAME@.h.jinja2",
+                    "fastexp_v4_@NEURON_NAME@.h.jinja2",
                     "@NEURON_NAME@.cpp.jinja2",
                     "@NEURON_NAME@.h.jinja2",
                     "cm_tree_@NEURON_NAME@.cpp.jinja2",
@@ -159,13 +162,17 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
 
     def setup_printers(self):
         self._constant_printer = ConstantPrinter()
+        exp_function = "std::exp"
+        if self.get_option("fp_precision") == "single":
+            exp_function = "std::expf"
+        propagator_exp_function = "cm_fast_propagator_exp" if self.get_option("use_fastexp") else exp_function
 
         # C++/NEST API printers
         self._type_symbol_printer = NESTCppTypeSymbolPrinter()
         self._nest_variable_printer = NESTVariablePrinter(expression_printer=None, with_origin=True,
                                                           with_vector_parameter=True)
-        self._nest_function_call_printer = NESTCppFunctionCallPrinter(None)
-        self._nest_function_call_printer_no_origin = NESTCppFunctionCallPrinter(None)
+        self._nest_function_call_printer = NESTCppFunctionCallPrinter(None, exp_function=exp_function)
+        self._nest_function_call_printer_no_origin = NESTCppFunctionCallPrinter(None, exp_function=exp_function)
 
         self._printer = CppExpressionPrinter(
             simple_expression_printer=CppSimpleExpressionPrinter(variable_printer=self._nest_variable_printer,
@@ -184,6 +191,22 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
                                                                  function_call_printer=self._nest_function_call_printer_no_origin))
         self._nest_variable_printer_no_origin._expression_printer = self._printer_no_origin
         self._nest_function_call_printer_no_origin._expression_printer = self._printer_no_origin
+
+        self._nest_variable_printer_no_origin_propagator = NESTVariablePrinter(
+            None,
+            with_origin=False,
+            with_vector_parameter=True,
+            enforce_getter=False)
+        self._nest_function_call_printer_no_origin_propagator = NESTCppFunctionCallPrinter(
+            None,
+            exp_function=propagator_exp_function)
+        self._printer_no_origin_propagator = CppExpressionPrinter(
+            simple_expression_printer=CppSimpleExpressionPrinter(
+                variable_printer=self._nest_variable_printer_no_origin_propagator,
+                constant_printer=self._constant_printer,
+                function_call_printer=self._nest_function_call_printer_no_origin_propagator))
+        self._nest_variable_printer_no_origin_propagator._expression_printer = self._printer_no_origin_propagator
+        self._nest_function_call_printer_no_origin_propagator._expression_printer = self._printer_no_origin_propagator
 
         # GSL printers
         self._gsl_variable_printer = GSLVariablePrinter(None)
@@ -210,9 +233,16 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
         raise TemplateRuntimeError(msg)
 
     def set_options(self, options: Mapping[str, Any]) -> Mapping[str, Any]:
+        if not options:
+            return {}
+        if "fp_precision" in options and options["fp_precision"] not in ["single", "double"]:
+            raise ValueError("`fp_precision` must be either 'single' or 'double'.")
+        if "use_fastexp" in options and not isinstance(options["use_fastexp"], bool):
+            raise ValueError("`use_fastexp` must be a bool.")
         self._nest_code_generator.set_options(options)
         ret = super().set_options(options)
         self.setup_template_env()
+        self.setup_printers()
 
         return ret
 
@@ -278,7 +308,8 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
             neuron_name_to_filename[neuron.get_name()] = {
                 "neuroncurrents": self.get_cm_syns_neuroncurrents_file_prefix(neuron),
                 "main": self.get_cm_syns_main_file_prefix(neuron),
-                "tree": self.get_cm_syns_tree_file_prefix(neuron)
+                "tree": self.get_cm_syns_tree_file_prefix(neuron),
+                "fastexp": self.get_cm_syns_fastexp_file_prefix(neuron)
             }
         namespace["perNeuronFileNamesCm"] = neuron_name_to_filename
 
@@ -300,6 +331,9 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
 
     def get_cm_syns_tree_file_prefix(self, neuron):
         return "cm_tree_" + neuron.get_name()
+
+    def get_cm_syns_fastexp_file_prefix(self, neuron):
+        return "fastexp_v4_" + neuron.get_name()
 
     def get_stdp_synapse_main_file_prefix(self, synapse):
         return synapse.get_name()
@@ -631,6 +665,7 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
             "NeuronCurrents": self.get_cm_syns_neuroncurrents_file_prefix,
             "Tree": self.get_cm_syns_tree_file_prefix,
             "Main": self.get_cm_syns_main_file_prefix,
+            "fastexp": self.get_cm_syns_fastexp_file_prefix,
         }
 
         def compute_prefix(file_name):
@@ -709,8 +744,10 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
                 return self.printer_factory.create_ast_vector_parameter_setter_and_printer(index, black_list)
 
         vector_printer = VectorPrinter(neuron, self._printer_no_origin)
+        vector_printer_propagator = VectorPrinter(neuron, self._printer_no_origin_propagator)
 
         namespace["vector_printer"] = vector_printer
+        namespace["vector_printer_propagator"] = vector_printer_propagator
 
         # NESTML syntax keywords
         namespace["PyNestMLLexer"] = {}
@@ -720,6 +757,8 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
                 namespace["PyNestMLLexer"][kw] = eval("PyNestMLLexer." + kw)
 
         namespace["nest_version"] = self.get_option("nest_version")
+        namespace["fp_precision"] = self.get_option("fp_precision")
+        namespace["use_fastexp"] = self.get_option("use_fastexp")
 
         namespace["neuronName"] = neuron.get_name()
         namespace["neuron"] = neuron
@@ -859,7 +898,8 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
         neuron_specific_filenames = {
             "neuroncurrents": self.get_cm_syns_neuroncurrents_file_prefix(neuron),
             "main": self.get_cm_syns_main_file_prefix(neuron),
-            "tree": self.get_cm_syns_tree_file_prefix(neuron)}
+            "tree": self.get_cm_syns_tree_file_prefix(neuron),
+            "fastexp": self.get_cm_syns_fastexp_file_prefix(neuron)}
 
         namespace["neuronSpecificFileNamesCmSyns"] = neuron_specific_filenames
 
