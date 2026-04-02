@@ -107,6 +107,19 @@ private:
     std::vector< {{ cm_scalar_t }} > i_tot_{{ion_channel_name}} = {};
     std::vector< {{ cm_scalar_t }} > i_vals_{{ion_channel_name}} = {};
     std::vector< {{ cm_scalar_t }} > g_vals_{{ion_channel_name}} = {};
+    std::vector< {{ cm_scalar_t }} > v_comp_chan_ = {};
+    {%- for ode in channel_info["Dependencies"]["concentrations"] %}
+    std::vector< {{ cm_scalar_t }} > dep_conc_{{ode.lhs.name}}_chan_ = {};
+    {%- endfor %}
+    {%- for inline in channel_info["Dependencies"]["receptors"] %}
+    std::vector< {{ cm_scalar_t }} > dep_rec_{{inline.variable_name}}_chan_ = {};
+    {%- endfor %}
+    {%- for inline in channel_info["Dependencies"]["channels"] %}
+    std::vector< {{ cm_scalar_t }} > dep_chan_{{inline.variable_name}}_chan_ = {};
+    {%- endfor %}
+    {%- for inline in channel_info["Dependencies"]["continuous"] %}
+    std::vector< {{ cm_scalar_t }} > dep_con_in_{{inline.variable_name}}_chan_ = {};
+    {%- endfor %}
     std::vector< std::pair< std::size_t, int > > con_area = {};
 
     //zero recordable variable in case of zero contribution channel
@@ -217,6 +230,19 @@ private:
 
     // concentration value (root-ode state)
     std::vector< {{ cm_scalar_t }} > {{concentration_name}} = {};
+    std::vector< {{ cm_scalar_t }} > v_comp_conc_ = {};
+    {%- for ode in concentration_info["Dependencies"]["concentrations"] %}
+    std::vector< {{ cm_scalar_t }} > dep_conc_{{ode.lhs.name}}_conc_ = {};
+    {%- endfor %}
+    {%- for inline in concentration_info["Dependencies"]["receptors"] %}
+    std::vector< {{ cm_scalar_t }} > dep_rec_{{inline.variable_name}}_conc_ = {};
+    {%- endfor %}
+    {%- for inline in concentration_info["Dependencies"]["channels"] %}
+    std::vector< {{ cm_scalar_t }} > dep_chan_{{inline.variable_name}}_conc_ = {};
+    {%- endfor %}
+    {%- for inline in concentration_info["Dependencies"]["continuous"] %}
+    std::vector< {{ cm_scalar_t }} > dep_con_in_{{inline.variable_name}}_conc_ = {};
+    {%- endfor %}
 
     //zero recordable variable in case of zero contribution concentration
     {{ cm_scalar_t }} zero_recordable = 0;
@@ -330,6 +356,19 @@ private:
   std::vector< {{ cm_scalar_t }} > i_tot_{{receptor_name}} = {};
   std::vector< {{ cm_scalar_t }} > i_vals_{{receptor_name}} = {};
   std::vector< {{ cm_scalar_t }} > g_vals_{{receptor_name}} = {};
+  std::vector< {{ cm_scalar_t }} > v_comp_rec_ = {};
+  {%- for ode in receptor_info["Dependencies"]["concentrations"] %}
+  std::vector< {{ cm_scalar_t }} > dep_conc_{{ode.lhs.name}}_rec_ = {};
+  {%- endfor %}
+  {%- for inline in receptor_info["Dependencies"]["receptors"] %}
+  std::vector< {{ cm_scalar_t }} > dep_rec_{{inline.variable_name}}_rec_ = {};
+  {%- endfor %}
+  {%- for inline in receptor_info["Dependencies"]["channels"] %}
+  std::vector< {{ cm_scalar_t }} > dep_chan_{{inline.variable_name}}_rec_ = {};
+  {%- endfor %}
+  {%- for inline in receptor_info["Dependencies"]["continuous"] %}
+  std::vector< {{ cm_scalar_t }} > dep_con_in_{{inline.variable_name}}_rec_ = {};
+  {%- endfor %}
   std::vector< std::pair< std::size_t, int > > con_area = {};
 
   // user declared internals in order they were declared, initialized via pre_run_hook() or calibrate()
@@ -488,6 +527,23 @@ private:
   std::vector< {{ cm_scalar_t }} > i_tot_{{receptor_name}} = {};
   std::vector< {{ cm_scalar_t }} > i_vals_{{receptor_name}} = {};
   std::vector< {{ cm_scalar_t }} > g_vals_{{receptor_name}} = {};
+  std::vector< {{ cm_scalar_t }} > v_comp_rec_ = {};
+  {%- set conc_dep = set(receptor_info["Dependencies"]["concentrations"]).union(synapse_info["Dependencies"]["concentrations"])%}
+  {%- set rec_dep = set(receptor_info["Dependencies"]["receptors"]).union(synapse_info["Dependencies"]["receptors"])%}
+  {%- set chan_dep = set(receptor_info["Dependencies"]["channels"]).union(synapse_info["Dependencies"]["channels"])%}
+  {%- set con_in_dep = set(receptor_info["Dependencies"]["continuous"]).union(synapse_info["Dependencies"]["continuous"])%}
+  {%- for ode in conc_dep %}
+  std::vector< {{ cm_scalar_t }} > dep_conc_{{ode.lhs.name}}_rec_ = {};
+  {%- endfor %}
+  {%- for inline in rec_dep %}
+  std::vector< {{ cm_scalar_t }} > dep_rec_{{inline.variable_name}}_rec_ = {};
+  {%- endfor %}
+  {%- for inline in chan_dep %}
+  std::vector< {{ cm_scalar_t }} > dep_chan_{{inline.variable_name}}_rec_ = {};
+  {%- endfor %}
+  {%- for inline in con_in_dep %}
+  std::vector< {{ cm_scalar_t }} > dep_con_in_{{inline.variable_name}}_rec_ = {};
+  {%- endfor %}
   std::vector< std::pair< std::size_t, int > > con_area = {};
 
   // user declared internals in order they were declared, initialized via pre_run_hook() or calibrate()
@@ -662,6 +718,19 @@ private:
   std::vector< {{ cm_scalar_t }} > i_tot_{{continuous_name}} = {};
   std::vector< {{ cm_scalar_t }} > i_vals_{{continuous_name}} = {};
   std::vector< {{ cm_scalar_t }} > g_vals_{{continuous_name}} = {};
+  std::vector< {{ cm_scalar_t }} > v_comp_con_in_ = {};
+  {%- for ode in continuous_info["Dependencies"]["concentrations"] %}
+  std::vector< {{ cm_scalar_t }} > dep_conc_{{ode.lhs.name}}_con_in_ = {};
+  {%- endfor %}
+  {%- for inline in continuous_info["Dependencies"]["receptors"] %}
+  std::vector< {{ cm_scalar_t }} > dep_rec_{{inline.variable_name}}_con_in_ = {};
+  {%- endfor %}
+  {%- for inline in continuous_info["Dependencies"]["channels"] %}
+  std::vector< {{ cm_scalar_t }} > dep_chan_{{inline.variable_name}}_con_in_ = {};
+  {%- endfor %}
+  {%- for inline in continuous_info["Dependencies"]["continuous"] %}
+  std::vector< {{ cm_scalar_t }} > dep_con_in_{{inline.variable_name}}_con_in_ = {};
+  {%- endfor %}
   std::vector< std::pair< std::size_t, int > > con_area = {};
 
   // user declared internals in order they were declared, initialized via pre_run_hook() or calibrate()
@@ -814,9 +883,14 @@ private:
 {%- if fp_precision == "single" %}
   std::map< Name, {{ cm_scalar_t }}* > recordable_sources_;
   std::map< Name, double > recordable_mirrors_;
+  bool has_recordable_mirrors_ = false;
 
   inline void update_recordable_mirrors()
   {
+    if ( !has_recordable_mirrors_ )
+    {
+      return;
+    }
     for ( auto& rec_it : recordable_sources_ )
     {
       if ( rec_it.second )
@@ -1219,6 +1293,7 @@ public:
     {% endfor %}
 
 {%- if fp_precision == "single" %}
+    has_recordable_mirrors_ = has_recordable_mirrors_ || !raw_recordables.empty();
     for ( const auto& rec_it : raw_recordables )
     {
       recordable_sources_[ rec_it.first ] = rec_it.second;
@@ -1426,7 +1501,10 @@ public:
                         , *i_vals_comp, *g_vals_comp);
     {% endfor -%}
 {%- if fp_precision == "single" %}
-    update_recordable_mirrors();
+    if ( has_recordable_mirrors_ )
+    {
+      update_recordable_mirrors();
+    }
 {%- endif %}
   };
 
@@ -1458,7 +1536,10 @@ public:
     {%- endif %}
     {% endfor -%}
 {%- if fp_precision == "single" %}
-    update_recordable_mirrors();
+    if ( has_recordable_mirrors_ )
+    {
+      update_recordable_mirrors();
+    }
 {%- endif %}
   };
 };

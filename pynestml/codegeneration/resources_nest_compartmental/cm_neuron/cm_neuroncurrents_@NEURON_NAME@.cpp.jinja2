@@ -198,6 +198,7 @@ void nest::{{ion_channel_name}}{{cm_unique_suffix}}::new_channel(std::size_t com
         i_tot_{{ion_channel_name}}.push_back(0);
         i_vals_{{ion_channel_name}}.push_back(0);
         g_vals_{{ion_channel_name}}.push_back(0);
+        v_comp_chan_.push_back(0);
         compartment_association.push_back(comp_ass);
 
         {%- for pure_variable_name, variable_info in channel_info["States"].items() %}
@@ -277,6 +278,7 @@ void nest::{{ion_channel_name}}{{cm_unique_suffix}}::new_channel(std::size_t com
         i_tot_{{ion_channel_name}}.push_back(0);
         i_vals_{{ion_channel_name}}.push_back(0);
         g_vals_{{ion_channel_name}}.push_back(0);
+        v_comp_chan_.push_back(0);
 
         {%- for pure_variable_name, variable_info in channel_info["States"].items() %}
         // state variable {{pure_variable_name }}
@@ -442,20 +444,66 @@ void nest::{{ion_channel_name}}{{cm_unique_suffix}}::f_numstep(const std::vector
         {{render_lambda(function, printer_no_origin)}}
         {%- endfor %}
 
+    std::size_t con_area_count = con_area.size();
+    if(con_area_count > 0){
+        for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
+            std::size_t con_start = con_area[con_area_index].first;
+            std::size_t con_end = con_area[con_area_index+1].first;
+            int offset = con_area[con_area_index].second;
+
+            #pragma omp simd
+            for(std::size_t chan_id = con_start; chan_id < con_end; chan_id++){
+                v_comp_chan_[chan_id] = shared_v_comp[chan_id + offset];
+                {%- for ode in channel_info["Dependencies"]["concentrations"] %}
+                dep_conc_{{ode.lhs.name}}_chan_[chan_id] = shared_{{ode.lhs.name}}[chan_id + offset];
+                {%- endfor %}
+                {%- for inline in channel_info["Dependencies"]["receptors"] %}
+                dep_rec_{{inline.variable_name}}_chan_[chan_id] = shared_{{inline.variable_name}}[chan_id + offset];
+                {%- endfor %}
+                {%- for inline in channel_info["Dependencies"]["channels"] %}
+                dep_chan_{{inline.variable_name}}_chan_[chan_id] = shared_{{inline.variable_name}}[chan_id + offset];
+                {%- endfor %}
+                {%- for inline in channel_info["Dependencies"]["continuous"] %}
+                dep_con_in_{{inline.variable_name}}_chan_[chan_id] = shared_{{inline.variable_name}}[chan_id + offset];
+                {%- endfor %}
+            }
+        }
+
+        std::size_t con_start = con_area[con_area_count-1].first;
+        int offset = con_area[con_area_count-1].second;
+
+        #pragma omp simd
+        for(std::size_t chan_id = con_start; chan_id < neuron_{{ ion_channel_name }}_channel_count; chan_id++){
+            v_comp_chan_[chan_id] = shared_v_comp[chan_id + offset];
+            {%- for ode in channel_info["Dependencies"]["concentrations"] %}
+            dep_conc_{{ode.lhs.name}}_chan_[chan_id] = shared_{{ode.lhs.name}}[chan_id + offset];
+            {%- endfor %}
+            {%- for inline in channel_info["Dependencies"]["receptors"] %}
+            dep_rec_{{inline.variable_name}}_chan_[chan_id] = shared_{{inline.variable_name}}[chan_id + offset];
+            {%- endfor %}
+            {%- for inline in channel_info["Dependencies"]["channels"] %}
+            dep_chan_{{inline.variable_name}}_chan_[chan_id] = shared_{{inline.variable_name}}[chan_id + offset];
+            {%- endfor %}
+            {%- for inline in channel_info["Dependencies"]["continuous"] %}
+            dep_con_in_{{inline.variable_name}}_chan_[chan_id] = shared_{{inline.variable_name}}[chan_id + offset];
+            {%- endfor %}
+        }
+    }
+
         #pragma omp simd
         for(std::size_t i = 0; i < neuron_{{ ion_channel_name }}_channel_count; i++){
-            {{ cm_scalar_t }} v_comp = shared_v_comp[compartment_association[i]];
+            {{ cm_scalar_t }} v_comp = v_comp_chan_[i];
             {% for ode in channel_info["Dependencies"]["concentrations"] %}
-            {{ cm_scalar_t }} {{ode.lhs.name}} = shared_{{ode.lhs.name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{ode.lhs.name}} = dep_conc_{{ode.lhs.name}}_chan_[i];
             {% endfor %}
             {% for inline in channel_info["Dependencies"]["receptors"] %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_rec_{{inline.variable_name}}_chan_[i];
             {% endfor %}
             {% for inline in channel_info["Dependencies"]["channels"] %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_chan_{{inline.variable_name}}_chan_[i];
             {% endfor %}
             {% for inline in channel_info["Dependencies"]["continuous"] %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_con_in_{{inline.variable_name}}_chan_[i];
             {% endfor %}
 
         {%- for replacement, expression in channel_info["cse_function_replacements"].items() %}
@@ -501,7 +549,6 @@ void nest::{{ion_channel_name}}{{cm_unique_suffix}}::f_numstep(const std::vector
             i_vals_{{ion_channel_name}}[i] = i_tot_{{ion_channel_name}}[i] - d_i_tot_dv * v_comp;
         }
 
-    std::size_t con_area_count = con_area.size();
     if(con_area_count > 0){
         for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
             std::size_t con_start = con_area[con_area_index].first;
@@ -856,20 +903,39 @@ void nest::{{ concentration_name }}{{cm_unique_suffix}}::f_numstep(const std::ve
         {{render_lambda(function, printer_no_origin)}}
         {%- endfor %}
 
+
+    #pragma omp simd
+    for(std::size_t i = 0; i < neuron_{{ concentration_name }}_concentration_count; i++){
+        std::size_t comp_idx = compartment_association[i];
+        v_comp_conc_[i] = shared_v_comp[comp_idx];
+        {%- for ode in concentration_info["Dependencies"]["concentrations"] %}
+        dep_conc_{{ode.lhs.name}}_conc_[i] = shared_{{ode.lhs.name}}[comp_idx];
+        {%- endfor %}
+        {%- for inline in concentration_info["Dependencies"]["receptors"] %}
+        dep_rec_{{inline.variable_name}}_conc_[i] = shared_{{inline.variable_name}}[comp_idx];
+        {%- endfor %}
+        {%- for inline in concentration_info["Dependencies"]["channels"] %}
+        dep_chan_{{inline.variable_name}}_conc_[i] = shared_{{inline.variable_name}}[comp_idx];
+        {%- endfor %}
+        {%- for inline in concentration_info["Dependencies"]["continuous"] %}
+        dep_con_in_{{inline.variable_name}}_conc_[i] = shared_{{inline.variable_name}}[comp_idx];
+        {%- endfor %}
+    }
+
         #pragma omp simd
         for(std::size_t i = 0; i < neuron_{{ concentration_name }}_concentration_count; i++){
-            {{ cm_scalar_t }} v_comp = shared_v_comp[compartment_association[i]];
+            {{ cm_scalar_t }} v_comp = v_comp_conc_[i];
             {% for ode in concentration_info["Dependencies"]["concentrations"] %}
-            {{ cm_scalar_t }} {{ode.lhs.name}} = shared_{{ode.lhs.name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{ode.lhs.name}} = dep_conc_{{ode.lhs.name}}_conc_[i];
             {% endfor %}
             {% for inline in concentration_info["Dependencies"]["receptors"] %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_rec_{{inline.variable_name}}_conc_[i];
             {% endfor %}
             {% for inline in concentration_info["Dependencies"]["channels"] %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_chan_{{inline.variable_name}}_conc_[i];
             {% endfor %}
             {% for inline in concentration_info["Dependencies"]["continuous"] %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_con_in_{{inline.variable_name}}_conc_[i];
             {% endfor %}
 
         {%- for replacement, expression in concentration_info["cse_function_replacements"].items() %}
@@ -1188,21 +1254,64 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}::f_numstep(const std::vector< {
     {{render_lambda(function, printer_no_origin)}}
     {%- endfor %}
 
+  std::size_t con_area_count = con_area.size();
+  if(con_area_count > 0){
+      for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
+          std::size_t con_start = con_area[con_area_index].first;
+          std::size_t con_end = con_area[con_area_index+1].first;
+          int offset = con_area[con_area_index].second;
+          #pragma omp simd
+          for(std::size_t rec_id = con_start; rec_id < con_end; rec_id++){
+              v_comp_rec_[rec_id] = shared_v_comp[rec_id + offset];
+              {%- for ode in receptor_info["Dependencies"]["concentrations"] %}
+              dep_conc_{{ode.lhs.name}}_rec_[rec_id] = shared_{{ode.lhs.name}}[rec_id + offset];
+              {%- endfor %}
+              {%- for inline in receptor_info["Dependencies"]["receptors"] %}
+              dep_rec_{{inline.variable_name}}_rec_[rec_id] = shared_{{inline.variable_name}}[rec_id + offset];
+              {%- endfor %}
+              {%- for inline in receptor_info["Dependencies"]["channels"] %}
+              dep_chan_{{inline.variable_name}}_rec_[rec_id] = shared_{{inline.variable_name}}[rec_id + offset];
+              {%- endfor %}
+              {%- for inline in receptor_info["Dependencies"]["continuous"] %}
+              dep_con_in_{{inline.variable_name}}_rec_[rec_id] = shared_{{inline.variable_name}}[rec_id + offset];
+              {%- endfor %}
+          }
+      }
+      std::size_t con_start = con_area[con_area_count-1].first;
+      int offset = con_area[con_area_count-1].second;
+      #pragma omp simd
+      for(std::size_t rec_id = con_start; rec_id < neuron_{{ receptor_name }}_receptor_count; rec_id++){
+          v_comp_rec_[rec_id] = shared_v_comp[rec_id + offset];
+          {%- for ode in receptor_info["Dependencies"]["concentrations"] %}
+          dep_conc_{{ode.lhs.name}}_rec_[rec_id] = shared_{{ode.lhs.name}}[rec_id + offset];
+          {%- endfor %}
+          {%- for inline in receptor_info["Dependencies"]["receptors"] %}
+          dep_rec_{{inline.variable_name}}_rec_[rec_id] = shared_{{inline.variable_name}}[rec_id + offset];
+          {%- endfor %}
+          {%- for inline in receptor_info["Dependencies"]["channels"] %}
+          dep_chan_{{inline.variable_name}}_rec_[rec_id] = shared_{{inline.variable_name}}[rec_id + offset];
+          {%- endfor %}
+          {%- for inline in receptor_info["Dependencies"]["continuous"] %}
+          dep_con_in_{{inline.variable_name}}_rec_[rec_id] = shared_{{inline.variable_name}}[rec_id + offset];
+          {%- endfor %}
+      }
+  }
+
       //update ODE state variable
   #pragma omp simd
   for(std::size_t i = 0; i < neuron_{{ receptor_name }}_receptor_count; i++){
-            {{ cm_scalar_t }} v_comp = shared_v_comp[compartment_association[i]];
+            {{ cm_scalar_t }} v_comp = v_comp_rec_[i];
             {% for ode in receptor_info["Dependencies"]["concentrations"] %}
-            {{ cm_scalar_t }} {{ode.lhs.name}} = shared_{{ode.lhs.name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{ode.lhs.name}} = dep_conc_{{ode.lhs.name}}_rec_[i];
             {% endfor %}
             {% for inline in receptor_info["Dependencies"]["receptors"] %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_rec_{{inline.variable_name}}_rec_[i];
             {% endfor %}
             {% for inline in receptor_info["Dependencies"]["channels"] %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_chan_{{inline.variable_name}}_rec_[i];
             {% endfor %}
             {% for inline in receptor_info["Dependencies"]["continuous"] %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_con_in_{{inline.variable_name}}_rec_[i];
             {% endfor %}
 
         {%- for replacement, expression in receptor_info["cse_function_replacements"].items() %}
@@ -1256,7 +1365,6 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}::f_numstep(const std::vector< {
       i_vals_{{receptor_name}}[i] = i_tot_{{receptor_name}}[i] - d_i_tot_dv * v_comp;
   }
 
-  std::size_t con_area_count = con_area.size();
   if(con_area_count > 0){
       for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
           std::size_t con_start = con_area[con_area_index].first;
@@ -1776,21 +1884,64 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::f_numstep
         {{render_lambda(function, printer_no_origin)}}
         {%- endfor %}
 
+  std::size_t con_area_count = con_area.size();
+  if(con_area_count > 0){
+      for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
+          std::size_t con_start = con_area[con_area_index].first;
+          std::size_t con_end = con_area[con_area_index+1].first;
+          int offset = con_area[con_area_index].second;
+          #pragma omp simd
+          for(std::size_t rec_id = con_start; rec_id < con_end; rec_id++){
+              v_comp_rec_[rec_id] = shared_v_comp[rec_id + offset];
+              {%- for ode in conc_dep %}
+              dep_conc_{{ode.lhs.name}}_rec_[rec_id] = shared_{{ode.lhs.name}}[rec_id + offset];
+              {%- endfor %}
+              {%- for inline in rec_dep %}
+              dep_rec_{{inline.variable_name}}_rec_[rec_id] = shared_{{inline.variable_name}}[rec_id + offset];
+              {%- endfor %}
+              {%- for inline in chan_dep %}
+              dep_chan_{{inline.variable_name}}_rec_[rec_id] = shared_{{inline.variable_name}}[rec_id + offset];
+              {%- endfor %}
+              {%- for inline in con_in_dep %}
+              dep_con_in_{{inline.variable_name}}_rec_[rec_id] = shared_{{inline.variable_name}}[rec_id + offset];
+              {%- endfor %}
+          }
+      }
+      std::size_t con_start = con_area[con_area_count-1].first;
+      int offset = con_area[con_area_count-1].second;
+      #pragma omp simd
+      for(std::size_t rec_id = con_start; rec_id < neuron_{{ receptor_name }}_receptor_count; rec_id++){
+          v_comp_rec_[rec_id] = shared_v_comp[rec_id + offset];
+          {%- for ode in conc_dep %}
+          dep_conc_{{ode.lhs.name}}_rec_[rec_id] = shared_{{ode.lhs.name}}[rec_id + offset];
+          {%- endfor %}
+          {%- for inline in rec_dep %}
+          dep_rec_{{inline.variable_name}}_rec_[rec_id] = shared_{{inline.variable_name}}[rec_id + offset];
+          {%- endfor %}
+          {%- for inline in chan_dep %}
+          dep_chan_{{inline.variable_name}}_rec_[rec_id] = shared_{{inline.variable_name}}[rec_id + offset];
+          {%- endfor %}
+          {%- for inline in con_in_dep %}
+          dep_con_in_{{inline.variable_name}}_rec_[rec_id] = shared_{{inline.variable_name}}[rec_id + offset];
+          {%- endfor %}
+      }
+  }
+
       //update ODE state variable
   #pragma omp simd
   for(std::size_t i = 0; i < neuron_{{ receptor_name }}_receptor_count; i++){
-            {{ cm_scalar_t }} v_comp = shared_v_comp[compartment_association[i]];
+            {{ cm_scalar_t }} v_comp = v_comp_rec_[i];
             {% for ode in conc_dep %}
-            {{ cm_scalar_t }} {{ode.lhs.name}} = shared_{{ode.lhs.name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{ode.lhs.name}} = dep_conc_{{ode.lhs.name}}_rec_[i];
             {% endfor %}
             {% for inline in rec_dep %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_rec_{{inline.variable_name}}_rec_[i];
             {% endfor %}
             {% for inline in chan_dep %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_chan_{{inline.variable_name}}_rec_[i];
             {% endfor %}
             {% for inline in con_in_dep %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_con_in_{{inline.variable_name}}_rec_[i];
             {% endfor %}
 
         {%- for replacement, expression in receptor_info["cse_function_replacements"].items() %}
@@ -1844,7 +1995,6 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::f_numstep
       i_vals_{{receptor_name}}[i] = i_tot_{{receptor_name}}[i] - d_i_tot_dv * v_comp;
     }
 
-  std::size_t con_area_count = con_area.size();
   if(con_area_count > 0){
       for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
           std::size_t con_start = con_area[con_area_index].first;
@@ -2159,20 +2309,63 @@ void nest::{{continuous_name}}{{cm_unique_suffix}}::f_numstep(const std::vector<
     {{render_lambda(function, printer_no_origin)}}
     {%- endfor %}
 
+  std::size_t con_area_count = con_area.size();
+  if(con_area_count > 0){
+      for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
+          std::size_t con_start = con_area[con_area_index].first;
+          std::size_t con_end = con_area[con_area_index+1].first;
+          int offset = con_area[con_area_index].second;
+          #pragma omp simd
+          for(std::size_t con_in_id = con_start; con_in_id < con_end; con_in_id++){
+              v_comp_con_in_[con_in_id] = shared_v_comp[con_in_id + offset];
+              {%- for ode in continuous_info["Dependencies"]["concentrations"] %}
+              dep_conc_{{ode.lhs.name}}_con_in_[con_in_id] = shared_{{ode.lhs.name}}[con_in_id + offset];
+              {%- endfor %}
+              {%- for inline in continuous_info["Dependencies"]["receptors"] %}
+              dep_rec_{{inline.variable_name}}_con_in_[con_in_id] = shared_{{inline.variable_name}}[con_in_id + offset];
+              {%- endfor %}
+              {%- for inline in continuous_info["Dependencies"]["channels"] %}
+              dep_chan_{{inline.variable_name}}_con_in_[con_in_id] = shared_{{inline.variable_name}}[con_in_id + offset];
+              {%- endfor %}
+              {%- for inline in continuous_info["Dependencies"]["continuous"] %}
+              dep_con_in_{{inline.variable_name}}_con_in_[con_in_id] = shared_{{inline.variable_name}}[con_in_id + offset];
+              {%- endfor %}
+          }
+      }
+      std::size_t con_start = con_area[con_area_count-1].first;
+      int offset = con_area[con_area_count-1].second;
+      #pragma omp simd
+      for(std::size_t con_in_id = con_start; con_in_id < neuron_{{ continuous_name }}_continuous_input_count; con_in_id++){
+          v_comp_con_in_[con_in_id] = shared_v_comp[con_in_id + offset];
+          {%- for ode in continuous_info["Dependencies"]["concentrations"] %}
+          dep_conc_{{ode.lhs.name}}_con_in_[con_in_id] = shared_{{ode.lhs.name}}[con_in_id + offset];
+          {%- endfor %}
+          {%- for inline in continuous_info["Dependencies"]["receptors"] %}
+          dep_rec_{{inline.variable_name}}_con_in_[con_in_id] = shared_{{inline.variable_name}}[con_in_id + offset];
+          {%- endfor %}
+          {%- for inline in continuous_info["Dependencies"]["channels"] %}
+          dep_chan_{{inline.variable_name}}_con_in_[con_in_id] = shared_{{inline.variable_name}}[con_in_id + offset];
+          {%- endfor %}
+          {%- for inline in continuous_info["Dependencies"]["continuous"] %}
+          dep_con_in_{{inline.variable_name}}_con_in_[con_in_id] = shared_{{inline.variable_name}}[con_in_id + offset];
+          {%- endfor %}
+      }
+  }
+
   #pragma omp simd
   for(std::size_t i = 0; i < neuron_{{ continuous_name }}_continuous_input_count; i++){
-            {{ cm_scalar_t }} v_comp = shared_v_comp[compartment_association[i]];
+            {{ cm_scalar_t }} v_comp = v_comp_con_in_[i];
             {% for ode in continuous_info["Dependencies"]["concentrations"] %}
-            {{ cm_scalar_t }} {{ode.lhs.name}} = shared_{{ode.lhs.name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{ode.lhs.name}} = dep_conc_{{ode.lhs.name}}_con_in_[i];
             {% endfor %}
             {% for inline in continuous_info["Dependencies"]["receptors"] %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_rec_{{inline.variable_name}}_con_in_[i];
             {% endfor %}
             {% for inline in continuous_info["Dependencies"]["channels"] %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_chan_{{inline.variable_name}}_con_in_[i];
             {% endfor %}
             {% for inline in continuous_info["Dependencies"]["continuous"] %}
-            {{ cm_scalar_t }} {{inline.variable_name}} = shared_{{inline.variable_name}}[compartment_association[i]];
+            {{ cm_scalar_t }} {{inline.variable_name}} = dep_con_in_{{inline.variable_name}}_con_in_[i];
             {% endfor %}
 
         {%- for replacement, expression in continuous_info["cse_function_replacements"].items() %}
@@ -2221,7 +2414,6 @@ void nest::{{continuous_name}}{{cm_unique_suffix}}::f_numstep(const std::vector<
       i_vals_{{continuous_name}}[i] = i_tot_{{continuous_name}}[i] - d_i_tot_dv * v_comp;
   }
 
-  std::size_t con_area_count = con_area.size();
   if(con_area_count > 0){
       for(std::size_t con_area_index = 0; con_area_index < con_area_count-1; con_area_index++){
           std::size_t con_start = con_area[con_area_index].first;
