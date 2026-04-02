@@ -880,26 +880,6 @@ private:
   //compartment gi states
   std::vector< {{ cm_scalar_t }} >* g_vals_comp;
   std::vector< {{ cm_scalar_t }} >* i_vals_comp;
-{%- if fp_precision == "single" %}
-  std::map< Name, {{ cm_scalar_t }}* > recordable_sources_;
-  std::map< Name, double > recordable_mirrors_;
-  bool has_recordable_mirrors_ = false;
-
-  inline void update_recordable_mirrors()
-  {
-    if ( !has_recordable_mirrors_ )
-    {
-      return;
-    }
-    for ( auto& rec_it : recordable_sources_ )
-    {
-      if ( rec_it.second )
-      {
-        recordable_mirrors_[ rec_it.first ] = static_cast< double >( *rec_it.second );
-      }
-    }
-  }
-{%- endif %}
 
 public:
   NeuronCurrents{{cm_unique_suffix}}(std::vector< {{ cm_scalar_t }} >* g_vals, std::vector< {{ cm_scalar_t }} >* i_vals, bool* self_spikes)
@@ -1228,43 +1208,28 @@ public:
     {% endfor -%}
   };
 
-  std::map< Name, double* > get_recordables( const long compartment_idx )
+  std::map< Name, {{ cm_scalar_t }}* > get_recordables( const long compartment_idx )
   {
-{%- if fp_precision == "single" %}
-    std::map< Name, {{ cm_scalar_t }}* > raw_recordables;
-{%- endif %}
-    std::map< Name, double* > recordables;
+    std::map< Name, {{ cm_scalar_t }}* > recordables;
 
     // append ion channel state variables to recordables
     {%- for ion_channel_name, channel_info in chan_info.items() %}
     {{ion_channel_name}}{{channel_suffix}}.append_recordables(
-{%- if fp_precision == "single" %}
-      &raw_recordables
-{%- else %}
       &recordables
-{%- endif %}
       , compartment_idx );
     {% endfor %}
 
     // append concentration state variables to recordables
     {%- for concentration_name, concentration_info in conc_info.items() %}
     {{concentration_name}}{{concentration_suffix}}.append_recordables(
-{%- if fp_precision == "single" %}
-      &raw_recordables
-{%- else %}
       &recordables
-{%- endif %}
       , compartment_idx );
     {% endfor %}
 
     // append receptor state variables to recordables
     {%- for receptor_name, receptor_info in recs_info.items() %}
     {{receptor_name}}{{receptor_suffix}}.append_recordables(
-{%- if fp_precision == "single" %}
-      &raw_recordables
-{%- else %}
       &recordables
-{%- endif %}
       , compartment_idx );
     {% endfor %}
 
@@ -1272,11 +1237,7 @@ public:
     {%- for receptor_name, receptor_info in recs_info.items() %}
     {%- for synapse_name, synapse_info in syns_info.items() %}
     {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.append_recordables(
-{%- if fp_precision == "single" %}
-      &raw_recordables
-{%- else %}
       &recordables
-{%- endif %}
       , compartment_idx );
     {% endfor %}
     {% endfor %}
@@ -1284,23 +1245,9 @@ public:
     // append continuous input state variables to recordables
     {%- for continuous_name, continuous_info in con_in_info.items() %}
     {{continuous_name}}{{continuous_suffix}}.append_recordables(
-{%- if fp_precision == "single" %}
-      &raw_recordables
-{%- else %}
       &recordables
-{%- endif %}
       , compartment_idx );
     {% endfor %}
-
-{%- if fp_precision == "single" %}
-    has_recordable_mirrors_ = has_recordable_mirrors_ || !raw_recordables.empty();
-    for ( const auto& rec_it : raw_recordables )
-    {
-      recordable_sources_[ rec_it.first ] = rec_it.second;
-      recordable_mirrors_[ rec_it.first ] = rec_it.second ? static_cast< double >( *rec_it.second ) : 0.0;
-      recordables[ rec_it.first ] = &recordable_mirrors_[ rec_it.first ];
-    }
-{%- endif %}
 
     return recordables;
   };
@@ -1500,12 +1447,6 @@ public:
                         {% endif %}{% for inline in continuous_info["Dependencies"]["continuous"] %}, {{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %}
                         , *i_vals_comp, *g_vals_comp);
     {% endfor -%}
-{%- if fp_precision == "single" %}
-    if ( has_recordable_mirrors_ )
-    {
-      update_recordable_mirrors();
-    }
-{%- endif %}
   };
 
   void f_self_spike(){
@@ -1535,12 +1476,6 @@ public:
     {{continuous_name}}{{continuous_suffix}}.f_self_spike();
     {%- endif %}
     {% endfor -%}
-{%- if fp_precision == "single" %}
-    if ( has_recordable_mirrors_ )
-    {
-      update_recordable_mirrors();
-    }
-{%- endif %}
   };
 };
 

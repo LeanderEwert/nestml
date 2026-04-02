@@ -122,6 +122,14 @@ project( ${MODULE_NAME} CXX )
 
 set( CM_EXTRA_COMPILE_FLAGS "" )
 set( CM_EXTRA_LINK_FLAGS "" )
+{%- if fp_precision == "single" %}
+include( CheckCXXCompilerFlag )
+check_cxx_compiler_flag( "-fdenormal-fp-math=positive-zero" CM_HAS_DENORMALS_TO_ZERO )
+if ( CM_HAS_DENORMALS_TO_ZERO )
+    set( CM_EXTRA_COMPILE_FLAGS "${CM_EXTRA_COMPILE_FLAGS} -fdenormal-fp-math=positive-zero" )
+    message( STATUS "single precision enabled: using -fdenormal-fp-math=positive-zero" )
+endif ()
+{%- endif %}
 {%- if use_fastexp %}
 include( CheckCXXCompilerFlag )
 include( CheckLibraryExists )

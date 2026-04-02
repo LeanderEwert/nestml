@@ -199,6 +199,18 @@ void nest::{{ion_channel_name}}{{cm_unique_suffix}}::new_channel(std::size_t com
         i_vals_{{ion_channel_name}}.push_back(0);
         g_vals_{{ion_channel_name}}.push_back(0);
         v_comp_chan_.push_back(0);
+        {%- for ode in channel_info["Dependencies"]["concentrations"] %}
+        dep_conc_{{ode.lhs.name}}_chan_.push_back(0);
+        {%- endfor %}
+        {%- for inline in channel_info["Dependencies"]["receptors"] %}
+        dep_rec_{{inline.variable_name}}_chan_.push_back(0);
+        {%- endfor %}
+        {%- for inline in channel_info["Dependencies"]["channels"] %}
+        dep_chan_{{inline.variable_name}}_chan_.push_back(0);
+        {%- endfor %}
+        {%- for inline in channel_info["Dependencies"]["continuous"] %}
+        dep_con_in_{{inline.variable_name}}_chan_.push_back(0);
+        {%- endfor %}
         compartment_association.push_back(comp_ass);
 
         {%- for pure_variable_name, variable_info in channel_info["States"].items() %}
@@ -279,6 +291,18 @@ void nest::{{ion_channel_name}}{{cm_unique_suffix}}::new_channel(std::size_t com
         i_vals_{{ion_channel_name}}.push_back(0);
         g_vals_{{ion_channel_name}}.push_back(0);
         v_comp_chan_.push_back(0);
+        {%- for ode in channel_info["Dependencies"]["concentrations"] %}
+        dep_conc_{{ode.lhs.name}}_chan_.push_back(0);
+        {%- endfor %}
+        {%- for inline in channel_info["Dependencies"]["receptors"] %}
+        dep_rec_{{inline.variable_name}}_chan_.push_back(0);
+        {%- endfor %}
+        {%- for inline in channel_info["Dependencies"]["channels"] %}
+        dep_chan_{{inline.variable_name}}_chan_.push_back(0);
+        {%- endfor %}
+        {%- for inline in channel_info["Dependencies"]["continuous"] %}
+        dep_con_in_{{inline.variable_name}}_chan_.push_back(0);
+        {%- endfor %}
 
         {%- for pure_variable_name, variable_info in channel_info["States"].items() %}
         // state variable {{pure_variable_name }}
@@ -655,6 +679,19 @@ void nest::{{concentration_name}}{{cm_unique_suffix}}::new_concentration(std::si
     if(concentration_contributing){
         neuron_{{ concentration_name }}_concentration_count++;
         {{concentration_name}}.push_back(0);
+        v_comp_conc_.push_back(0);
+        {%- for ode in concentration_info["Dependencies"]["concentrations"] %}
+        dep_conc_{{ode.lhs.name}}_conc_.push_back(0);
+        {%- endfor %}
+        {%- for inline in concentration_info["Dependencies"]["receptors"] %}
+        dep_rec_{{inline.variable_name}}_conc_.push_back(0);
+        {%- endfor %}
+        {%- for inline in concentration_info["Dependencies"]["channels"] %}
+        dep_chan_{{inline.variable_name}}_conc_.push_back(0);
+        {%- endfor %}
+        {%- for inline in concentration_info["Dependencies"]["continuous"] %}
+        dep_con_in_{{inline.variable_name}}_conc_.push_back(0);
+        {%- endfor %}
         compartment_association.push_back(comp_ass);
 
         {%- for variable_type, variable_info in concentration_info["ODEs"].items() %}
@@ -735,6 +772,19 @@ void nest::{{concentration_name}}{{cm_unique_suffix}}::new_concentration(std::si
     if(concentration_contributing){
         neuron_{{ concentration_name }}_concentration_count++;
         {{concentration_name}}.push_back(0);
+        v_comp_conc_.push_back(0);
+        {%- for ode in concentration_info["Dependencies"]["concentrations"] %}
+        dep_conc_{{ode.lhs.name}}_conc_.push_back(0);
+        {%- endfor %}
+        {%- for inline in concentration_info["Dependencies"]["receptors"] %}
+        dep_rec_{{inline.variable_name}}_conc_.push_back(0);
+        {%- endfor %}
+        {%- for inline in concentration_info["Dependencies"]["channels"] %}
+        dep_chan_{{inline.variable_name}}_conc_.push_back(0);
+        {%- endfor %}
+        {%- for inline in concentration_info["Dependencies"]["continuous"] %}
+        dep_con_in_{{inline.variable_name}}_conc_.push_back(0);
+        {%- endfor %}
         compartment_association.push_back(comp_ass);
 
         {%- for variable_type, variable_info in concentration_info["ODEs"].items() %}
@@ -1043,6 +1093,19 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}::new_receptor(std::size_t comp_
     i_tot_{{receptor_name}}.push_back(0);
     i_vals_{{receptor_name}}.push_back(0);
     g_vals_{{receptor_name}}.push_back(0);
+    v_comp_rec_.push_back(0);
+    {%- for ode in receptor_info["Dependencies"]["concentrations"] %}
+    dep_conc_{{ode.lhs.name}}_rec_.push_back(0);
+    {%- endfor %}
+    {%- for inline in receptor_info["Dependencies"]["receptors"] %}
+    dep_rec_{{inline.variable_name}}_rec_.push_back(0);
+    {%- endfor %}
+    {%- for inline in receptor_info["Dependencies"]["channels"] %}
+    dep_chan_{{inline.variable_name}}_rec_.push_back(0);
+    {%- endfor %}
+    {%- for inline in receptor_info["Dependencies"]["continuous"] %}
+    dep_con_in_{{inline.variable_name}}_rec_.push_back(0);
+    {%- endfor %}
     compartment_association.push_back(comp_ass);
     rec_idx.push_back(rec_index);
 
@@ -1095,6 +1158,19 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}::new_receptor(std::size_t comp_
     i_tot_{{receptor_name}}.push_back(0);
     i_vals_{{receptor_name}}.push_back(0);
     g_vals_{{receptor_name}}.push_back(0);
+    v_comp_rec_.push_back(0);
+    {%- for ode in receptor_info["Dependencies"]["concentrations"] %}
+    dep_conc_{{ode.lhs.name}}_rec_.push_back(0);
+    {%- endfor %}
+    {%- for inline in receptor_info["Dependencies"]["receptors"] %}
+    dep_rec_{{inline.variable_name}}_rec_.push_back(0);
+    {%- endfor %}
+    {%- for inline in receptor_info["Dependencies"]["channels"] %}
+    dep_chan_{{inline.variable_name}}_rec_.push_back(0);
+    {%- endfor %}
+    {%- for inline in receptor_info["Dependencies"]["continuous"] %}
+    dep_con_in_{{inline.variable_name}}_rec_.push_back(0);
+    {%- endfor %}
     rec_idx.push_back(rec_index);
 
     {%- for pure_variable_name, variable_info in receptor_info["States"].items() %}
@@ -1467,6 +1543,19 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::new_recep
     i_tot_{{receptor_name}}.push_back(0);
     i_vals_{{receptor_name}}.push_back(0);
     g_vals_{{receptor_name}}.push_back(0);
+    v_comp_rec_.push_back(0);
+    {%- for ode in receptor_info["Dependencies"]["concentrations"] %}
+    dep_conc_{{ode.lhs.name}}_rec_.push_back(0);
+    {%- endfor %}
+    {%- for inline in receptor_info["Dependencies"]["receptors"] %}
+    dep_rec_{{inline.variable_name}}_rec_.push_back(0);
+    {%- endfor %}
+    {%- for inline in receptor_info["Dependencies"]["channels"] %}
+    dep_chan_{{inline.variable_name}}_rec_.push_back(0);
+    {%- endfor %}
+    {%- for inline in receptor_info["Dependencies"]["continuous"] %}
+    dep_con_in_{{inline.variable_name}}_rec_.push_back(0);
+    {%- endfor %}
     compartment_association.push_back(comp_ass);
     syn_idx.push_back(syn_index);
     delayed_spikes.push_back(TimerDeque(Time::get_resolution().get_ms()));
@@ -1563,6 +1652,19 @@ void nest::{{receptor_name}}{{cm_unique_suffix}}_con_{{synapse_name}}::new_recep
     i_tot_{{receptor_name}}.push_back(0);
     i_vals_{{receptor_name}}.push_back(0);
     g_vals_{{receptor_name}}.push_back(0);
+    v_comp_rec_.push_back(0);
+    {%- for ode in receptor_info["Dependencies"]["concentrations"] %}
+    dep_conc_{{ode.lhs.name}}_rec_.push_back(0);
+    {%- endfor %}
+    {%- for inline in receptor_info["Dependencies"]["receptors"] %}
+    dep_rec_{{inline.variable_name}}_rec_.push_back(0);
+    {%- endfor %}
+    {%- for inline in receptor_info["Dependencies"]["channels"] %}
+    dep_chan_{{inline.variable_name}}_rec_.push_back(0);
+    {%- endfor %}
+    {%- for inline in receptor_info["Dependencies"]["continuous"] %}
+    dep_con_in_{{inline.variable_name}}_rec_.push_back(0);
+    {%- endfor %}
     syn_idx.push_back(syn_index);
 
     if( receptor_params->known( "{{synapse_info["DelayVariable"]}}" ) )
@@ -2099,6 +2201,19 @@ void nest::{{continuous_name}}{{cm_unique_suffix}}::new_continuous_input(std::si
     i_tot_{{continuous_name}}.push_back(0);
     i_vals_{{continuous_name}}.push_back(0);
     g_vals_{{continuous_name}}.push_back(0);
+    v_comp_con_in_.push_back(0);
+    {%- for ode in continuous_info["Dependencies"]["concentrations"] %}
+    dep_conc_{{ode.lhs.name}}_con_in_.push_back(0);
+    {%- endfor %}
+    {%- for inline in continuous_info["Dependencies"]["receptors"] %}
+    dep_rec_{{inline.variable_name}}_con_in_.push_back(0);
+    {%- endfor %}
+    {%- for inline in continuous_info["Dependencies"]["channels"] %}
+    dep_chan_{{inline.variable_name}}_con_in_.push_back(0);
+    {%- endfor %}
+    {%- for inline in continuous_info["Dependencies"]["continuous"] %}
+    dep_con_in_{{inline.variable_name}}_con_in_.push_back(0);
+    {%- endfor %}
     compartment_association.push_back(comp_ass);
     continuous_idx.push_back(con_in_index);
 
@@ -2151,6 +2266,19 @@ void nest::{{continuous_name}}{{cm_unique_suffix}}::new_continuous_input(std::si
     i_tot_{{continuous_name}}.push_back(0);
     i_vals_{{continuous_name}}.push_back(0);
     g_vals_{{continuous_name}}.push_back(0);
+    v_comp_con_in_.push_back(0);
+    {%- for ode in continuous_info["Dependencies"]["concentrations"] %}
+    dep_conc_{{ode.lhs.name}}_con_in_.push_back(0);
+    {%- endfor %}
+    {%- for inline in continuous_info["Dependencies"]["receptors"] %}
+    dep_rec_{{inline.variable_name}}_con_in_.push_back(0);
+    {%- endfor %}
+    {%- for inline in continuous_info["Dependencies"]["channels"] %}
+    dep_chan_{{inline.variable_name}}_con_in_.push_back(0);
+    {%- endfor %}
+    {%- for inline in continuous_info["Dependencies"]["continuous"] %}
+    dep_con_in_{{inline.variable_name}}_con_in_.push_back(0);
+    {%- endfor %}
     continuous_idx.push_back(con_in_index);
 
     {%- for pure_variable_name, variable_info in continuous_info["States"].items() %}
