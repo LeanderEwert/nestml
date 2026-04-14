@@ -95,6 +95,10 @@ class NESTVariablePrinter(CppVariablePrinter):
         symbol = variable.get_scope().resolve_to_symbol(variable.get_complete_name(), SymbolKind.VARIABLE)
 
         if symbol is None:
+            # CSE temporaries are injected during code-generation rewrites and can be
+            # unresolved in intermediate scopes; keep the textual identifier intact.
+            if variable.get_complete_name().startswith("simd_cse_tmp_"):
+                return variable.get_complete_name()
             # test if variable name can be resolved to a type
             if PredefinedUnits.is_unit(variable.get_complete_name()):
                 return str(NESTUnitConverter.get_factor(PredefinedUnits.get_unit(variable.get_complete_name()).get_unit()))

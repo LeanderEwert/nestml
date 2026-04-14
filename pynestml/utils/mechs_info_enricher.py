@@ -19,6 +19,7 @@
 # You should have received a copy of the GNU General Public License
 # along with NEST.  If not, see <http://www.gnu.org/licenses/>.
 import copy
+import re
 from collections import defaultdict
 
 from odetoolbox import analysis
@@ -47,6 +48,7 @@ from pynestml.codegeneration.printers.nestml_printer import NESTMLPrinter
 from pynestml.meta_model.ast_inline_expression import ASTInlineExpression
 from pynestml.meta_model.ast_model import ASTModel
 from pynestml.symbols.predefined_functions import PredefinedFunctions
+from pynestml.symbols.predefined_units import PredefinedUnits
 from pynestml.symbols.symbol import SymbolKind
 from pynestml.visitors.ast_parent_visitor import ASTParentVisitor
 from pynestml.visitors.ast_symbol_table_visitor import ASTSymbolTableVisitor
@@ -100,6 +102,53 @@ class MechsInfoEnricher:
 
     def sympy_compatible_print(expr):
         return LowerMinMaxPrinter().doprint(expr)
+
+    @classmethod
+    def _parse_cse_expression_with_unit_collision_protection(cls, neuron: ASTModel, expr, scope=None):
+        """
+        Parse a SymPy expression back to NESTML while protecting identifiers that collide
+        with predefined unit names (e.g. `ca`).
+        """
+        expression_txt = cls.sympy_compatible_print(expr)
+        collision_map = {}
+        predefined_units = PredefinedUnits.get_units()
+        if not predefined_units:
+            PredefinedUnits.register_units()
+            predefined_units = PredefinedUnits.get_units()
+
+        # SymPy provides reliable symbol names; only rewrite exact token matches.
+        for sym_name in sorted((str(sym) for sym in expr.free_symbols), key=len, reverse=True):
+            if sym_name in predefined_units:
+                protected_name = f"nestml_cse_var_{sym_name}"
+                collision_map[protected_name] = sym_name
+                expression_txt = re.sub(rf"(?<![A-Za-z0-9_]){re.escape(sym_name)}(?![A-Za-z0-9_])", protected_name, expression_txt)
+
+        parsed_expression = ModelParser.parse_expression(expression_txt)
+
+        for protected_name, original_name in collision_map.items():
+            ASTVariableNameReplacerVisitor(parsed_expression, protected_name, original_name)
+
+        if scope is None:
+            # Defer symbol resolution to a later full-model symbol table pass.
+            return parsed_expression
+
+        parsed_expression.update_scope(scope)
+        parsed_expression.accept(ASTSymbolTableVisitor())
+        return parsed_expression
+
+    @classmethod
+    def _nearest_scope(cls, node, fallback_scope):
+        scope = node.get_scope()
+        parent = None
+        if "parent_" in dir(node):
+            parent = node.get_parent()
+        while scope is None and parent is not None:
+            scope = parent.get_scope()
+            if "parent_" in dir(parent):
+                parent = parent.get_parent()
+            else:
+                parent = None
+        return scope if scope is not None else fallback_scope
 
     @classmethod
     def enrich_with_additional_info(cls, neuron: ASTModel, mechs_info: dict):
@@ -205,9 +254,8 @@ class MechsInfoEnricher:
             parsed_parameters = list()
             parsed_args = dict()
             for replacement in replacements:
-                parsed_replacement = ModelParser.parse_expression(cls.sympy_compatible_print(replacement[1]))
-                parsed_replacement.update_scope(neuron.get_equations_blocks()[0].get_scope())
-                parsed_replacement.accept(ASTSymbolTableVisitor())
+                parsed_replacement = cls._parse_cse_expression_with_unit_collision_protection(
+                    neuron, replacement[1], neuron.get_equations_blocks()[0].get_scope())
 
                 cse_replacements[cls.sympy_compatible_print(replacement[0])] = parsed_replacement
                 mechanism_info["non_vec_vars"].append(cls.sympy_compatible_print(replacement[0]))
@@ -215,9 +263,6 @@ class MechsInfoEnricher:
                 ASTUtils.add_declaration_to_state_block(neuron, cls.sympy_compatible_print(replacement[0]), "0")
 
                 parsed_parameter = ModelParser.parse_parameter(cls.sympy_compatible_print(replacement[0])+" real")
-                parsed_parameter.update_scope(neuron.get_equations_blocks()[0].get_scope())
-                parsed_parameter.accept(ASTSymbolTableVisitor())
-
                 parsed_parameters.append(parsed_parameter)
 
                 parsed_argument = ModelParser.parse_expression(cls.sympy_compatible_print(replacement[0]))
@@ -229,9 +274,8 @@ class MechsInfoEnricher:
             # Parse and replace reduced SIMD expressions
             for reduced_expr, association in zip(reduced_exprs[len(inlined_function_expressions):], expression_association):
 
-                expression = ModelParser.parse_expression(cls.sympy_compatible_print(reduced_expr))
-                expression.update_scope(neuron.get_equations_blocks()[0].get_scope())
-                expression.accept(ASTSymbolTableVisitor())
+                expression = cls._parse_cse_expression_with_unit_collision_protection(
+                    neuron, reduced_expr, neuron.get_equations_blocks()[0].get_scope())
 
                 original = mechanism_info
                 for key in association[:-1]:
@@ -241,10 +285,11 @@ class MechsInfoEnricher:
 
             # Parse reduced function expressions
             parsed_func_expressions = []
-            for reduced_expr in reduced_exprs[:len(inlined_function_expressions)]:
-                expression = ModelParser.parse_expression(cls.sympy_compatible_print(reduced_expr))
-                expression.update_scope(neuron.get_equations_blocks()[0].get_scope())
-                expression.accept(ASTSymbolTableVisitor())
+            for reduced_expr, original_expression in zip(
+                    reduced_exprs[:len(inlined_function_expressions)], function_expression_association):
+                function_scope = cls._nearest_scope(original_expression, neuron.get_equations_blocks()[0].get_scope())
+                expression = cls._parse_cse_expression_with_unit_collision_protection(
+                    neuron, reduced_expr, function_scope)
 
                 parsed_func_expressions.append(expression)
 
@@ -910,7 +955,8 @@ class ASTFunctionExpressionReplacer(ASTVisitor):
         var_extractor = ASTUsedVariableNamesExtractor(node)
         self.cse_function_vars = self.cse_vars & var_extractor.variable_names
         for new_param in self.cse_function_vars:
-            node.parameters.append(self.parameters[new_param])
+            # Append fresh parameter nodes; scope binding will be done in the full-symbol-table pass.
+            node.parameters.append(self.parameters[new_param].clone())
 
         node.accept(ASTParentVisitor())
 
@@ -935,3 +981,14 @@ class ASTFunctionCallParameterAdder(ASTVisitor):
         if self.recursion == 0:
             self.inside_function_call = False
 
+
+class ASTVariableNameReplacerVisitor(ASTVisitor):
+    def __init__(self, node, original_name, new_name):
+        super(ASTVariableNameReplacerVisitor, self).__init__()
+        self.original_name = original_name
+        self.new_name = new_name
+        node.accept(self)
+
+    def visit_variable(self, node):
+        if node.get_name() == self.original_name:
+            node.set_name(self.new_name)
