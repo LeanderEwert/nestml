@@ -33,12 +33,12 @@ __attribute__( ( always_inline ) ) inline float
 cm_fast_propagator_exp( const float x )
 {
   // Degree-5 polynomial approximation of exp(x) on [-2, 0].
-  constexpr float c0 = 9.999604420234498026e-01f;
-  constexpr float c1 = 9.991461618881908313e-01f;
-  constexpr float c2 = 4.955644075124273074e-01f;
-  constexpr float c3 = 1.572688083174653417e-01f;
-  constexpr float c4 = 3.196651681886048674e-02f;
-  constexpr float c5 = 3.185568834547398802e-03f;
+  constexpr float c0 = 9.999833698215347955e-01f;
+  constexpr float c1 = 9.993709968710966507e-01f;
+  constexpr float c2 = 4.961277470116420840e-01f;
+  constexpr float c3 = 1.578134199162989360e-01f;
+  constexpr float c4 = 3.218380466140600971e-02f;
+  constexpr float c5 = 3.214600822495845053e-03f;
 
   // Keep the evaluation inside the calibrated propagator interval while
   // preserving x < 0 (to match propagator semantics).
@@ -52,12 +52,12 @@ __attribute__( ( always_inline ) ) inline double
 cm_fast_propagator_exp( const double x )
 {
   // Degree-5 polynomial approximation of exp(x) on [-2, 0].
-  constexpr double c0 = 9.999604420234498026e-01;
-  constexpr double c1 = 9.991461618881908313e-01;
-  constexpr double c2 = 4.955644075124273074e-01;
-  constexpr double c3 = 1.572688083174653417e-01;
-  constexpr double c4 = 3.196651681886048674e-02;
-  constexpr double c5 = 3.185568834547398802e-03;
+  constexpr double c0 = 9.999833698215347955e-01;
+  constexpr double c1 = 9.993709968710966507e-01;
+  constexpr double c2 = 4.961277470116420840e-01;
+  constexpr double c3 = 1.578134199162989360e-01;
+  constexpr double c4 = 3.218380466140600971e-02;
+  constexpr double c5 = 3.214600822495845053e-03;
 
   // Keep the evaluation inside the calibrated propagator interval while
   // preserving x < 0 (to match propagator semantics).
