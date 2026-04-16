@@ -166,7 +166,12 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
         exp_function = "std::exp"
         if self.get_option("fp_precision") == "single":
             exp_function = "std::expf"
-        propagator_exp_function = "cm_fast_propagator_exp" if self.get_option("use_fastexp") else exp_function
+        if self.get_option("use_fastexp"):
+            propagator_exp_function = "cm_fast_propagator_exp"
+        elif self.get_option("fp_precision") == "single":
+            propagator_exp_function = "bounded_propagator_expf"
+        else:
+            propagator_exp_function = exp_function
 
         # C++/NEST API printers
         self._type_symbol_printer = NESTCppTypeSymbolPrinter()
