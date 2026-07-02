@@ -44,8 +44,8 @@ from pynestml.utils.model_parser import ModelParser
 
 
 def get_known_targets():
-    targets = ["NEST", "NEST_compartmental", "python_standalone", "autodoc", "pretty_render", "spinnaker",
-               "NEST_DESKTOP", "GeNN", "nest_gpu", "none"]
+    targets = ["NEST", "NEST_compartmental", "NEST_GPU_compartmental", "python_standalone", "autodoc",
+               "pretty_render", "spinnaker", "NEST_DESKTOP", "GeNN", "nest_gpu", "none"]
     targets = [s.upper() for s in targets]
     return targets
 
@@ -63,7 +63,7 @@ def transformers_from_target_name(target_name: str, options: Optional[Mapping[st
     if options is None:
         options = {}
 
-    if target_name.upper() in ["NEST", "SPINNAKER", "PYTHON_STANDALONE", "NEST_COMPARTMENTAL", "NEST_DESKTOP", "GENN", "NEST_GPU"]:
+    if target_name.upper() in ["NEST", "SPINNAKER", "PYTHON_STANDALONE", "NEST_COMPARTMENTAL", "NEST_GPU_COMPARTMENTAL", "NEST_DESKTOP", "GENN", "NEST_GPU"]:
         from pynestml.transformers.add_timestep_to_internals_transformer import AddTimestepToInternalsTransformer
 
         add_timestep_to_internals_transformer = AddTimestepToInternalsTransformer()
@@ -124,7 +124,7 @@ def transformers_from_target_name(target_name: str, options: Optional[Mapping[st
         variable_name_rewriter = IllegalVariableNameTransformer({"forbidden_names": ["False", "None", "True", "and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield"]})
         transformers.append(variable_name_rewriter)
 
-    if target_name.upper() not in ["NEST_COMPARTMENTAL"]:
+    if target_name.upper() not in ["NEST_COMPARTMENTAL", "NEST_GPU_COMPARTMENTAL"]:
         # InlineExpressionExpansionTransformer
         from pynestml.transformers.inline_expression_expansion_transformer import InlineExpressionExpansionTransformer
         transformer = InlineExpressionExpansionTransformer()
@@ -188,6 +188,10 @@ def code_generator_from_target_name(target_name: str, options: Optional[Mapping[
         from pynestml.codegeneration.nest_compartmental_code_generator import NESTCompartmentalCodeGenerator
         return NESTCompartmentalCodeGenerator()
 
+    if target_name.upper() == "NEST_GPU_COMPARTMENTAL":
+        from pynestml.codegeneration.nest_gpu_compartmental_code_generator import NESTGPUCompartmentalCodeGenerator
+        return NESTGPUCompartmentalCodeGenerator(options)
+
     if target_name.upper() == "SPINNAKER":
         from pynestml.codegeneration.spinnaker_code_generator import SpiNNakerCodeGenerator
         return SpiNNakerCodeGenerator(options)
@@ -233,7 +237,7 @@ def builder_from_target_name(target_name: str, options: Optional[Mapping[str, An
         remaining_options = builder.set_options(options)
         return builder, remaining_options
 
-    if target_name.upper() == "NEST_GPU":
+    if target_name.upper() in ["NEST_GPU", "NEST_GPU_COMPARTMENTAL"]:
         from pynestml.codegeneration.nest_gpu_builder import NESTGPUBuilder
         nest_gpu_builder = NESTGPUBuilder(options)
         remaining_options = nest_gpu_builder.set_options(options)
@@ -489,6 +493,21 @@ def generate_nest_compartmental_target(input_path: Union[str, Sequence[str]], ta
           ``std::exp``/``std::expf``.
     """
     generate_target(input_path, target_platform="NEST_compartmental", target_path=target_path,
+                    logging_level=logging_level, module_name=module_name, store_log=store_log,
+                    suffix=suffix, install_path=install_path, dev=dev, codegen_opts=codegen_opts)
+
+
+def generate_nest_gpu_compartmental_target(input_path: Union[str, Sequence[str]], target_path: Optional[str] = None,
+                                           install_path: Optional[str] = None, logging_level="ERROR",
+                                           module_name=None, store_log: bool = False, suffix: str = "",
+                                           dev: bool = False, codegen_opts: Optional[Mapping[str, Any]] = None):
+    r"""Generate experimental compartmental model code with CUDA/GPU-oriented templates.
+
+    The generated files are copied into the NEST-GPU source tree and the
+    NEST-GPU builder recompiles the simulator, analogous to the point-neuron
+    NEST-GPU target.
+    """
+    generate_target(input_path, target_platform="NEST_GPU_compartmental", target_path=target_path,
                     logging_level=logging_level, module_name=module_name, store_log=store_log,
                     suffix=suffix, install_path=install_path, dev=dev, codegen_opts=codegen_opts)
 
