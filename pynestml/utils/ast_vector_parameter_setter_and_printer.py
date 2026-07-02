@@ -21,7 +21,6 @@
 
 from pynestml.codegeneration.printers.ast_printer import ASTPrinter
 from pynestml.codegeneration.printers.nest_variable_printer import NESTVariablePrinter
-from pynestml.visitors.ast_visitor import ASTVisitor
 
 
 class ASTPreAndSuffixSetterAndPrinter(ASTPrinter):
@@ -50,72 +49,18 @@ class ASTPreAndSuffixSetterAndPrinter(ASTPrinter):
     def print(self, node):
         assert isinstance(self.printer._simple_expression_printer._variable_printer, NESTVariablePrinter)
 
-        self.printer._simple_expression_printer._variable_printer.cpp_variable_suffix = ""
-        self.printer._simple_expression_printer._variable_printer.cpp_variable_prefix = ""
+        variable_printer = self.printer._simple_expression_printer._variable_printer
 
-        if self.suffix:
-            self.printer._simple_expression_printer._variable_printer.cpp_variable_suffix = self.suffix
+        old_suffix = variable_printer.cpp_variable_suffix
+        old_prefix = variable_printer.cpp_variable_prefix
+        old_black_list = variable_printer.cpp_variable_black_list
 
-        if self.prefix:
-            self.printer._simple_expression_printer._variable_printer.cpp_variable_prefix = self.prefix
-
-        text = self.printer.print(node)
-
-        self.printer._simple_expression_printer._variable_printer.cpp_variable_suffix = ""
-        self.printer._simple_expression_printer._variable_printer.cpp_variable_prefix = ""
-
-        variable_collector = ASTSimpleVariableCollectorVisitor()
-
-        node.accept(variable_collector)
-
-        all_variables = set(variable_collector.all_variables)
-
-        local_white_list = all_variables - self.black_list
-
-        write_permission = [True] * len(text)
-
-        for var in local_white_list:
-            pos = 0
-            next_pos = 0
-            while pos >= 0:
-                pos = next_pos
-                pos = text.find(var, pos)
-                if pos >= 0:
-                    for j in range(pos, pos + len(var)):
-                        write_permission[j] = False
-                next_pos = pos + len(var)
-
-        ordered_black_list = sorted(self.black_list, key=len, reverse=True)
-        for var in ordered_black_list:
-            pos = 0
-            next_pos = 0
-            while pos >= 0:
-                pos = next_pos
-                pos = text.find(var, pos)
-                if pos >= 0:
-                    overwrite = False
-                    for j in range(pos, pos + len(var)):
-                        if write_permission[j]:
-                            overwrite = True
-                    if overwrite:
-                        start = pos + len(var)
-                        end = pos + len(var) + len(self.vector_parameter) + 2
-                        text = text[:start] + text[end:]
-                        write_permission = write_permission[:pos] + ([False] * len(var)) + write_permission[end:]
-                next_pos = pos + len(var)
-
-        return text
-
-
-class ASTSimpleVariableCollectorVisitor(ASTVisitor):
-    def __init__(self):
-        super(ASTSimpleVariableCollectorVisitor, self).__init__()
-        self.inside_variable = False
-        self.all_variables = set()
-
-    def visit_variable(self, node):
-        self.inside_variable = True
-        self.all_variables.add(node.name)
-
-    def endvisit_variable(self, node):
-        self.inside_variable = False
+        try:
+            variable_printer.cpp_variable_suffix = self.suffix or ""
+            variable_printer.cpp_variable_prefix = self.prefix or ""
+            variable_printer.cpp_variable_black_list = set(self.black_list)
+            return self.printer.print(node)
+        finally:
+            variable_printer.cpp_variable_suffix = old_suffix
+            variable_printer.cpp_variable_prefix = old_prefix
+            variable_printer.cpp_variable_black_list = old_black_list

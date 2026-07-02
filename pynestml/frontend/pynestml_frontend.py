@@ -237,7 +237,15 @@ def builder_from_target_name(target_name: str, options: Optional[Mapping[str, An
         remaining_options = builder.set_options(options)
         return builder, remaining_options
 
-    if target_name.upper() in ["NEST_GPU", "NEST_GPU_COMPARTMENTAL"]:
+    if target_name.upper() == "NEST_GPU_COMPARTMENTAL":
+        if options and options.get("skip_build", False):
+            return None, options
+        from pynestml.codegeneration.nest_gpu_builder import NESTGPUBuilder
+        nest_gpu_builder = NESTGPUBuilder(options)
+        remaining_options = nest_gpu_builder.set_options(options)
+        return nest_gpu_builder, remaining_options
+
+    if target_name.upper() == "NEST_GPU":
         from pynestml.codegeneration.nest_gpu_builder import NESTGPUBuilder
         nest_gpu_builder = NESTGPUBuilder(options)
         remaining_options = nest_gpu_builder.set_options(options)
@@ -505,7 +513,8 @@ def generate_nest_gpu_compartmental_target(input_path: Union[str, Sequence[str]]
 
     The generated files are copied into the NEST-GPU source tree and the
     NEST-GPU builder recompiles the simulator, analogous to the point-neuron
-    NEST-GPU target.
+    NEST-GPU target. Set ``codegen_opts={"skip_build": True}`` to stop after
+    code generation and NEST-GPU source-tree patching.
     """
     generate_target(input_path, target_platform="NEST_GPU_compartmental", target_path=target_path,
                     logging_level=logging_level, module_name=module_name, store_log=store_log,

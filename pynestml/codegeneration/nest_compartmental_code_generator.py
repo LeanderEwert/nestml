@@ -763,36 +763,19 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
             def set_std_vector_parameter(self, index = "i"):
                 self.suffix = "[" + index + "]"
 
-            def print(self, expression, index="i", black_list=[]):
+            def print(self, expression, index="i", black_list=None):
+                black_list = black_list or []
                 index_printer = self.printer_factory.create_ast_pre_and_suffix_setter_and_printer(suffix = "[" + index + "]", black_list = black_list)
                 return index_printer.print(expression)
 
-        class CUDAPrinter():
-            def __init__(self, neuron, printer):
-                self.printer_factory = ASTPreAndSuffixSetterAndPrinterFactory(neuron, printer)
-                self.suffix = None
-
-            def set_prefix(self, array_name="vars"):
-                self.prefix = array_name + "[i_"
-
-            def set_suffix(self, index="i"):
-                self.suffix = "+" + index + "]"
-
-            def print(self, expression, array_name="vars", index="i"):
-                index_printer = self.printer.create_ast_pre_and_suffix_setter_and_printer(prefix = array_name + "[i_", suffix = "+" + index + "]")
-                return index_printer.print(expression)
-
-            def printer(self, index="i", black_list=[]):
-                return self.printer_factory.create_ast_vector_parameter_setter_and_printer(index, black_list)
+            def printer(self, index="i", black_list=None):
+                black_list = black_list or []
+                return self.printer_factory.create_ast_pre_and_suffix_setter_and_printer(suffix = "[" + index + "]", black_list = black_list)
 
         vector_printer = VectorPrinter(neuron, self._printer_no_origin)
         vector_printer.set_std_vector_parameter()
-        cuda_printer = CUDAPrinter(neuron, self._printer_no_origin)
-        cuda_printer.set_prefix()
-        cuda_printer.set_suffix()
 
         namespace["vector_printer"] = vector_printer
-        namespace["cuda_printer"] = cuda_printer
 
         namespace["self_spikes_name"] = self.get_option("self_spikes_port")
 

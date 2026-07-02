@@ -49,6 +49,7 @@ class NESTVariablePrinter(CppVariablePrinter):
         self.variables_special_cases = variables_special_cases
         self.cpp_variable_suffix = ""
         self.cpp_variable_prefix = ""
+        self.cpp_variable_black_list = set()
         # self.postsynaptic_getter_string_ = "start->get_%s()"   # XXX: TODO: see https://github.com/nest/nestml/issues/1163
         # self.postsynaptic_getter_string_ = "((post_neuron_t*)(__target))->get_%s(t_hist_entry_ms)"
         self.postsynaptic_getter_string_ = "((post_neuron_t*)(__target))->get_%s(get_t())"
@@ -56,6 +57,23 @@ class NESTVariablePrinter(CppVariablePrinter):
     def set_getter_string(self, s):
         self.postsynaptic_getter_string_ = s
         return ""
+
+    def _should_apply_cpp_variable_affixes(self, variable: ASTVariable, symbol) -> bool:
+        if not self.cpp_variable_prefix and not self.cpp_variable_suffix:
+            return False
+
+        names = {
+            variable.get_name(),
+            variable.get_complete_name(),
+            symbol.get_symbol_name() if symbol else None,
+        }
+        return not any(name in self.cpp_variable_black_list for name in names if name)
+
+    def _apply_cpp_variable_affixes(self, variable: ASTVariable, symbol, text: str) -> str:
+        if not self._should_apply_cpp_variable_affixes(variable, symbol):
+            return text
+
+        return self.cpp_variable_prefix + text + self.cpp_variable_suffix
 
     def print_variable(self, variable: ASTVariable) -> str:
         """
@@ -127,17 +145,20 @@ class NESTVariablePrinter(CppVariablePrinter):
         if symbol.is_inline_expression:
             # there might not be a corresponding defined state variable; insist on calling the getter function
             if self.enforce_getter:
-                return self.cpp_variable_prefix + "get_" + self._print(variable, symbol, with_origin=False) + vector_param + "()" + self.cpp_variable_suffix
+                return self._apply_cpp_variable_affixes(
+                    variable, symbol, "get_" + self._print(variable, symbol, with_origin=False) + vector_param + "()")
             # modification to not enforce getter function:
             else:
-                return self.cpp_variable_prefix + self._print(variable, symbol, with_origin=False) + self.cpp_variable_suffix
+                return self._apply_cpp_variable_affixes(variable, symbol, self._print(variable, symbol, with_origin=False))
 
         assert not symbol.is_kernel(), "Cannot print kernel; kernel should have been converted during code generation"
 
         if symbol.is_state() or symbol.is_inline_expression:
-            return self.cpp_variable_prefix + self._print(variable, symbol, with_origin=self.with_origin) + vector_param + self.cpp_variable_suffix
+            return self._apply_cpp_variable_affixes(
+                variable, symbol, self._print(variable, symbol, with_origin=self.with_origin) + vector_param)
 
-        return self.cpp_variable_prefix + self._print(variable, symbol, with_origin=self.with_origin) + vector_param + self.cpp_variable_suffix
+        return self._apply_cpp_variable_affixes(
+            variable, symbol, self._print(variable, symbol, with_origin=self.with_origin) + vector_param)
 
     def _print_delay_variable(self, variable: ASTVariable) -> str:
         """
@@ -169,11 +190,11 @@ class NESTVariablePrinter(CppVariablePrinter):
             return "spike_inputs_grid_sum_[" + var_name + " - MIN_SPIKE_RECEPTOR]"
 
         return_symbol = variable_symbol.get_symbol_name()
-        if self.cpp_variable_suffix:
+        if self.cpp_variable_suffix and self._should_apply_cpp_variable_affixes(variable, variable_symbol):
             return_symbol += self.cpp_variable_suffix
-        if self.cpp_variable_prefix:
+        if self.cpp_variable_prefix and self._should_apply_cpp_variable_affixes(variable, variable_symbol):
             return_symbol = self.cpp_variable_prefix + return_symbol
-        if self.cpp_variable_suffix or self.cpp_variable_prefix:
+        if (self.cpp_variable_suffix or self.cpp_variable_prefix) and self._should_apply_cpp_variable_affixes(variable, variable_symbol):
             return return_symbol
 
         assert variable_symbol.is_continuous_input_port()

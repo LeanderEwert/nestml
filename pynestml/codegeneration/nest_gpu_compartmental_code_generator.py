@@ -57,6 +57,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
     }
     _default_options["nest_gpu_path"] = None
     _default_options["register_neuron_model"] = False
+    _default_options["skip_build"] = False
 
     def __init__(self, options: Optional[Mapping[str, Any]] = None):
         super().__init__(None)

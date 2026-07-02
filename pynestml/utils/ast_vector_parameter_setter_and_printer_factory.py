@@ -38,7 +38,8 @@ class ASTPreAndSuffixSetterAndPrinterFactory:
         self.printer = printer
         self.model = model
 
-    def create_ast_pre_and_suffix_setter_and_printer(self, prefix=None, suffix=None, black_list=[]):
+    def create_ast_pre_and_suffix_setter_and_printer(self, prefix=None, suffix=None, black_list=None):
+        black_list = black_list or []
         my_printer = ASTPreAndSuffixSetterAndPrinter()
         my_printer.printer = self.printer
         my_printer.model = self.model
