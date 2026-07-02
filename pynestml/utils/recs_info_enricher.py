@@ -23,6 +23,7 @@
 import copy
 import sympy
 
+from pynestml.meta_model.ast_expression import ASTExpression
 from pynestml.meta_model.ast_model import ASTModel
 from pynestml.symbols.predefined_functions import PredefinedFunctions
 from pynestml.utils.mechs_info_enricher import MechsInfoEnricher
@@ -104,7 +105,7 @@ class RecsInfoEnricher(MechsInfoEnricher):
             sympy_expr = sympy.parsing.sympy_parser.parse_expr(expr_str)
             sympy_expr = sympy.diff(sympy_expr, "v_comp")
 
-            ast_expression_d = ModelParser.parse_expression(str(sympy_expr))
+            ast_expression_d = ModelParser.parse_expression(cls.sympy_compatible_print(sympy_expr))
             # copy scope of the original inline_expression into the the derivative
             ast_expression_d.update_scope(inline_expression.get_scope())
             ast_expression_d.accept(ASTSymbolTableVisitor())
@@ -206,11 +207,17 @@ class RecsInfoEnricher(MechsInfoEnricher):
                 "ASTVariable": variable,
                 "init_expression": expression,
             }
-            if expression.is_function_call() and expression.get_function_call(
-            ).callee_name == PredefinedFunctions.TIME_RESOLUTION:
-                result[variable_name]["is_time_resolution"] = True
-            else:
+            if isinstance(expression, ASTExpression):
                 result[variable_name]["is_time_resolution"] = False
+                for func in expression.get_function_calls():
+                    if func.callee_name == PredefinedFunctions.TIME_RESOLUTION:
+                        result[variable_name]["is_time_resolution"] = True
+            else:
+                if expression.is_function_call() and expression.get_function_call(
+                ).callee_name == PredefinedFunctions.TIME_RESOLUTION:
+                    result[variable_name]["is_time_resolution"] = True
+                else:
+                    result[variable_name]["is_time_resolution"] = False
 
         return result
 

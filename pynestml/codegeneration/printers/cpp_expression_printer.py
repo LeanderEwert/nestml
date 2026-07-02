@@ -29,6 +29,7 @@ from pynestml.meta_model.ast_logical_operator import ASTLogicalOperator
 from pynestml.meta_model.ast_comparison_operator import ASTComparisonOperator
 from pynestml.meta_model.ast_node import ASTNode
 from pynestml.meta_model.ast_node_factory import ASTNodeFactory
+from pynestml.meta_model.ast_simple_expression import ASTSimpleExpression
 from pynestml.utils.ast_source_location import ASTSourceLocation
 
 
@@ -190,6 +191,25 @@ class CppExpressionPrinter(ExpressionPrinter):
         op = node.get_binary_operator()
 
         if op.is_pow_op:
+            rhs_node = node.get_rhs()
+            if isinstance(rhs_node, ASTSimpleExpression) and rhs_node.is_numeric_literal():
+                exponent = rhs_node.get_numeric_literal()
+                if isinstance(exponent, float) and exponent.is_integer():
+                    exponent = int(exponent)
+
+                if isinstance(exponent, int) and 0 <= exponent <= 4:
+                    lhs = self.print(node.get_lhs())
+                    if exponent == 0:
+                        return "1.0"
+                    if exponent == 1:
+                        return "(" + lhs + ")"
+                    if exponent == 2:
+                        return "(" + lhs + " * " + lhs + ")"
+                    if exponent == 3:
+                        return "(" + lhs + " * " + lhs + " * " + lhs + ")"
+                    if exponent == 4:
+                        return "(" + lhs + " * " + lhs + " * " + lhs + " * " + lhs + ")"
+
             # make a dummy ASTFunctionCall so we can delegate this to the FunctionCallPrinter
             dummy_ast_function_call: ASTFunctionCall = ASTNodeFactory.create_ast_function_call(callee_name="pow", args=(node.get_lhs(), node.get_rhs()), source_position=ASTSourceLocation.get_added_source_position())
             return self._simple_expression_printer._function_call_printer.print(dummy_ast_function_call)
@@ -207,6 +227,10 @@ class CppExpressionPrinter(ExpressionPrinter):
             return lhs + " * " + rhs
 
         if op.is_div_op:
+            if isinstance(node.get_rhs(), ASTSimpleExpression) and node.get_rhs().is_numeric_literal() and type(node.get_rhs().get_numeric_literal()) in [int, float]:
+                # make sure that division is always a floating point division, not C-style int division
+                return lhs + " / ((double)(" + rhs + "))"
+
             return lhs + " / " + rhs
 
         if op.is_modulo_op:

@@ -19,31 +19,34 @@
 # You should have received a copy of the GNU General Public License
 # along with NEST.  If not, see <http://www.gnu.org/licenses/>.
 
-from collections import defaultdict
+from typing import Any, Dict, Optional
 
+try:
+    # Available in the standard library starting with Python 3.12
+    from typing import override
+except ImportError:
+    # Fallback for Python 3.8 - 3.11
+    from typing_extensions import override
+
+from collections import defaultdict
 import copy
 
-from pynestml.utils.logger import Logger, LoggingLevel
-
-from pynestml.utils.messages import Messages
-
-from pynestml.frontend.frontend_configuration import FrontendConfiguration
-
-from pynestml.meta_model.ast_block_with_variables import ASTBlockWithVariables
-
-from pynestml.meta_model.ast_inline_expression import ASTInlineExpression
 from pynestml.codegeneration.printers.sympy_simple_expression_printer import SympySimpleExpressionPrinter
-
 from pynestml.codegeneration.printers.nestml_printer import NESTMLPrinter
 from pynestml.codegeneration.printers.constant_printer import ConstantPrinter
 from pynestml.codegeneration.printers.ode_toolbox_expression_printer import ODEToolboxExpressionPrinter
 from pynestml.codegeneration.printers.ode_toolbox_function_call_printer import ODEToolboxFunctionCallPrinter
 from pynestml.codegeneration.printers.ode_toolbox_variable_printer import ODEToolboxVariablePrinter
+from pynestml.meta_model.ast_block_with_variables import ASTBlockWithVariables
+from pynestml.frontend.frontend_configuration import FrontendConfiguration
 from pynestml.meta_model.ast_expression import ASTExpression
+from pynestml.meta_model.ast_inline_expression import ASTInlineExpression
 from pynestml.meta_model.ast_model import ASTModel
 from pynestml.meta_model.ast_simple_expression import ASTSimpleExpression
 from pynestml.utils.ast_mechanism_information_collector import ASTMechanismInformationCollector
 from pynestml.utils.ast_utils import ASTUtils
+from pynestml.utils.logger import Logger, LoggingLevel
+from pynestml.utils.messages import Messages
 
 from odetoolbox import analysis
 
@@ -189,75 +192,10 @@ class MechanismProcessing:
                           parameters_block: ASTBlockWithVariables,
                           kernel_buffer):
         kernel_buffers = {tuple(kernel_buffer)}
-        odetoolbox_indict = cls.transform_ode_and_kernels_to_json(
-            neuron, parameters_block, kernel_buffers)
+        odetoolbox_indict = ASTUtils.transform_ode_and_kernels_to_json(
+            neuron, [parameters_block], kernel_buffers, printer=cls._ode_toolbox_printer, include_ODEs=False)
         odetoolbox_indict["options"] = {}
         odetoolbox_indict["options"]["output_timestep_symbol"] = "__h"
-        return odetoolbox_indict
-
-    @classmethod
-    def transform_ode_and_kernels_to_json(
-            cls,
-            neuron: ASTModel,
-            parameters_block,
-            kernel_buffers):
-        """
-        Converts AST node to a JSON representation suitable for passing to ode-toolbox.
-
-        Each kernel has to be generated for each spike buffer convolve in which it occurs, e.g. if the NESTML model code contains the statements
-
-            convolve(G, ex_spikes)
-            convolve(G, in_spikes)
-
-        then `kernel_buffers` will contain the pairs `(G, ex_spikes)` and `(G, in_spikes)`, from which two ODEs will be generated, with dynamical state (variable) names `G__X__ex_spikes` and `G__X__in_spikes`.
-
-        :param parameters_block: ASTBlockWithVariables
-        :return: Dict
-        """
-        odetoolbox_indict = {"dynamics": []}
-
-        equations_block = neuron.get_equations_blocks()[0]
-
-        for kernel, spike_input_port in kernel_buffers:
-            if ASTUtils.is_delta_kernel(kernel):
-                continue
-            # delta function -- skip passing this to ode-toolbox
-
-            for kernel_var in kernel.get_variables():
-                expr = ASTUtils.get_expr_from_kernel_var(
-                    kernel, kernel_var.get_complete_name())
-                kernel_order = kernel_var.get_differential_order()
-                kernel_X_spike_buf_name_ticks = ASTUtils.construct_kernel_X_spike_buf_name(
-                    kernel_var.get_name(), spike_input_port.get_name(), kernel_order, diff_order_symbol="'")
-
-                ASTUtils.replace_rhs_variables(expr, kernel_buffers)
-
-                entry = {"expression": kernel_X_spike_buf_name_ticks + " = " + str(expr), "initial_values": {}}
-
-                # initial values need to be declared for order 1 up to kernel
-                # order (e.g. none for kernel function f(t) = ...; 1 for kernel
-                # ODE f'(t) = ...; 2 for f''(t) = ... and so on)
-                for order in range(kernel_order):
-                    iv_sym_name_ode_toolbox = ASTUtils.construct_kernel_X_spike_buf_name(
-                        kernel_var.get_name(), spike_input_port, order, diff_order_symbol="'")
-                    symbol_name_ = kernel_var.get_name() + "'" * order
-                    symbol = equations_block.get_scope().resolve_to_symbol(
-                        symbol_name_, SymbolKind.VARIABLE)
-                    assert symbol is not None, "Could not find initial value for variable " + symbol_name_
-                    initial_value_expr = symbol.get_declaring_expression()
-                    assert initial_value_expr is not None, "No initial value found for variable name " + symbol_name_
-                    entry["initial_values"][iv_sym_name_ode_toolbox] = cls._ode_toolbox_printer.print(
-                        initial_value_expr)
-
-                odetoolbox_indict["dynamics"].append(entry)
-
-        odetoolbox_indict["parameters"] = {}
-        if parameters_block is not None:
-            for decl in parameters_block.get_declarations():
-                for var in decl.variables:
-                    odetoolbox_indict["parameters"][var.get_complete_name(
-                    )] = cls._ode_toolbox_printer.print(decl.get_expression())
-
         return odetoolbox_indict
 
     @classmethod
@@ -286,11 +224,13 @@ class MechanismProcessing:
         return copy.deepcopy(cls.mechs_info[neuron][cls.mechType])
 
     @classmethod
-    def check_co_co(cls, neuron: ASTModel, global_info):
+    def check_co_co(cls, neuron: ASTModel, metadata: Optional[Dict[str, Dict[str, Any]]] = None):
         """
         Checks if mechanism conditions apply for the handed over neuron.
         :param neuron: a single neuron instance.
         """
+        assert metadata, "This coco needs metadata for the neuron model!"
+        global_info = metadata[neuron.name]
 
         # make sure we only run this a single time
         # subsequent calls will be after AST has been transformed
@@ -330,9 +270,14 @@ class MechanismProcessing:
 
     @classmethod
     def check_all_convolutions_with_self_spikes(cls, mechs_info):
+        from pynestml.codegeneration.nest_compartmental_code_generator import NESTCompartmentalCodeGenerator
         for mechanism_name, mechanism_info in mechs_info.items():
             for convolution_name, convolution in mechanism_info["convolutions"].items():
-                if convolution["spikes"]["name"] != "self_spikes":
+                if "self_spikes_port" in FrontendConfiguration.get_codegen_opts().keys():
+                    self_spikes_port_name = FrontendConfiguration.get_codegen_opts()["self_spikes_port"]
+                else:
+                    self_spikes_port_name = NESTCompartmentalCodeGenerator._default_options["self_spikes_port"]
+                if convolution["spikes"]["name"] != self_spikes_port_name:
                     code, message = Messages.cm_non_self_spike_convolution_in_mech(mechanism_name, cls.mechType)
                     Logger.log_message(error_position=None,
                                        code=code, message=message,
@@ -348,7 +293,7 @@ class MechanismProcessing:
             message += "\n"
             message += cls.print_dictionary(element, rec_step + 1)
         else:
-            if hasattr(element, 'name'):
+            if hasattr(element, "name"):
                 message += element.name
             elif isinstance(element, str):
                 message += element

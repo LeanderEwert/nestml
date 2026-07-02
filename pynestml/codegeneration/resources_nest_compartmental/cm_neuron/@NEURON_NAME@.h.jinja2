@@ -1,3 +1,4 @@
+{%- set cm_scalar_t = "float" if fp_precision == "single" else "double" -%}
 /*
  *  {{neuronSpecificFileNamesCmSyns["main"]}}.h
  *
@@ -31,6 +32,10 @@
 
 #include "{{neuronSpecificFileNamesCmSyns["neuroncurrents"]}}.h"
 #include "{{neuronSpecificFileNamesCmSyns["tree"]}}.h"
+
+{%- if (nest_version.startswith("main") or (nest_version_dict and ((nest_version_dict["major"] == 3 and nest_version_dict["minor"] >= 10) or nest_version_dict["major"] > 3))) %}
+typedef std::string Name;
+{%- endif %}
 
 namespace nest
 {
@@ -226,14 +231,12 @@ EndUserDocs
 */
 
 // Register the neuron model
-{%- if not (nest_version.startswith("v2") or nest_version.startswith("v3.0") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2")
-        or nest_version.startswith("v3.3") or nest_version.startswith("v3.4") or nest_version.startswith("v3.5") or nest_version.startswith("v3.6")) %}
+{%- if nest_version.startswith("main") or nest_version_dict and ((nest_version_dict["major"] >=3 and nest_version_dict["minor"] > 6) or nest_version_dict["major"] > 3) %}
 void register_{{ neuronSpecificFileNamesCmSyns["main"] }}( const std::string& name );
 {%- endif %}
 
 class {{neuronSpecificFileNamesCmSyns["main"]}} : public ArchivingNode
 {
-
 public:
   {{neuronSpecificFileNamesCmSyns["main"]}}();
   {{neuronSpecificFileNamesCmSyns["main"]}}( const {{neuronSpecificFileNamesCmSyns["main"]}}& );
@@ -255,14 +258,19 @@ public:
   void set_status( const DictionaryDatum& );
 
 private:
-  void add_compartment_( DictionaryDatum& dd );
-  void add_receptor_( DictionaryDatum& dd );
+  std::unique_ptr< bool > self_spikes;
+  std::unique_ptr< std::vector< {{ cm_scalar_t }} > > g_vals;
+  std::unique_ptr< std::vector< {{ cm_scalar_t }} > > i_vals;
+  bool thr_mem = true;
+
+  void add_compartment_( const DictionaryDatum& dd );
+  void add_receptor_( const DictionaryDatum& dd );
 
   void init_recordables_pointers_();
-{%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
-  void calibrate();
-{%- else %}
+{%- if nest_version.startswith("main") or nest_version_dict and ((nest_version_dict["major"] == 3 and nest_version_dict["minor"] > 3) or nest_version_dict["major"] > 3) %}
   void pre_run_hook();
+{%- else %}
+  void calibrate();
 {%- endif %}
 
   void update( Time const&, const long, const long );
@@ -274,7 +282,11 @@ private:
   double
   get_state_element( size_t elem )
   {
+{%- if fp_precision == "single" %}
+    return static_cast< double >( *recordables_values[ elem ] );
+{%- else %}
     return *recordables_values[ elem ];
+{%- endif %}
   };
 
   // The next classes need to be friends to access the State_ class/member
@@ -288,14 +300,15 @@ private:
   present in the model
   */
   std::vector< Name > recordables_names;
-  std::vector< double* > recordables_values;
+  std::vector< {{ cm_scalar_t }}* > recordables_values;
 
   //! Mapping of recordables names to access functions
   DynamicRecordablesMap< {{neuronSpecificFileNamesCmSyns["main"]}} > recordablesMap_;
   //! Logger for all analog data
   DynamicUniversalDataLogger< {{neuronSpecificFileNamesCmSyns["main"]}} > logger_;
 
-  double V_th_;
+  {{ cm_scalar_t }} V_th_;
+  bool prev_sub_th = true;
 };
 
 

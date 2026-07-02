@@ -19,6 +19,8 @@
 # You should have received a copy of the GNU General Public License
 # along with NEST.  If not, see <http://www.gnu.org/licenses/>.
 
+from collections import defaultdict
+
 from pynestml.meta_model.ast_model import ASTModel
 from pynestml.visitors.ast_parent_visitor import ASTParentVisitor
 from pynestml.visitors.ast_symbol_table_visitor import ASTSymbolTableVisitor
@@ -27,8 +29,6 @@ from pynestml.visitors.ast_visitor import ASTVisitor
 from pynestml.utils.model_parser import ModelParser
 from pynestml.symbols.predefined_functions import PredefinedFunctions
 from pynestml.symbols.symbol import SymbolKind
-
-from collections import defaultdict
 
 
 class GlobalInfoEnricher:
@@ -113,9 +113,9 @@ class GlobalInfoEnricher:
 
                     for variable in expression_variable_collector.all_variables:
                         for internal_declaration in neuron_internal_declaration_collector.internal_declarations:
-                            if variable.get_name() == internal_declaration.get_variables()[0].get_name() \
-                                    and internal_declaration.get_expression().is_function_call() \
-                                    and internal_declaration.get_expression().get_function_call().callee_name == \
+                            if variable.get_name() == internal_declaration.get_variables()[0].get_name()\
+                                    and internal_declaration.get_expression().is_function_call()\
+                                    and internal_declaration.get_expression().get_function_call().callee_name ==\
                                     PredefinedFunctions.TIME_RESOLUTION:
                                 global_info["time_resolution_var"] = variable
 
@@ -236,7 +236,7 @@ class ASTDeclarationCollectorAndUniqueRenamerVisitor(ASTVisitor):
                 self.variable_names[variable.get_name()] += 1
             else:
                 self.variable_names[variable.get_name()] = 0
-            new_name = variable.get_name() + '_' + str(self.variable_names[variable.get_name()])
+            new_name = variable.get_name() + "_" + str(self.variable_names[variable.get_name()])
             name_replacer = ASTVariableNameReplacerVisitor(variable.get_name(), new_name)
             self.current_block.accept(name_replacer)
         node.accept(ASTSymbolTableVisitor())

@@ -19,6 +19,15 @@
 # You should have received a copy of the GNU General Public License
 # along with NEST.  If not, see <http://www.gnu.org/licenses/>.
 
+from typing import Any, Dict, Optional
+
+try:
+    # Available in the standard library starting with Python 3.12
+    from typing import override
+except ImportError:
+    # Fallback for Python 3.8 - 3.11
+    from typing_extensions import override
+
 from pynestml.cocos.co_co import CoCo
 from pynestml.utils.logger import LoggingLevel, Logger
 from pynestml.utils.messages import Messages
@@ -27,21 +36,29 @@ from pynestml.utils.concentration_processing import ConcentrationProcessing
 from pynestml.utils.receptor_processing import ReceptorProcessing
 from pynestml.utils.continuous_input_processing import ContinuousInputProcessing
 from pynestml.meta_model.ast_model import ASTModel
+from pynestml.meta_model.ast_node import ASTNode
 
 
 class CoCoCmMechSharedCode(CoCo):
     @classmethod
-    def check_co_co(cls, model: ASTModel):
-        chan_info = ChannelProcessing.get_mechs_info(model)
-        conc_info = ConcentrationProcessing.get_mechs_info(model)
-        rec_info = ReceptorProcessing.get_mechs_info(model)
-        con_in_info = ContinuousInputProcessing.get_mechs_info(model)
+    @override
+    def check_co_co(cls, node: ASTNode, metadata: Optional[Dict[str, Dict[str, Any]]] = None):
+        """
+        Checks if any variables are used by multiple mechanisms which is forbidden.
+        :param node: a single model instance.
+        """
+        assert isinstance(node, ASTModel), "This coco can only be called on ASTModels!"
+
+        chan_info = ChannelProcessing.get_mechs_info(node)
+        conc_info = ConcentrationProcessing.get_mechs_info(node)
+        rec_info = ReceptorProcessing.get_mechs_info(node)
+        con_in_info = ContinuousInputProcessing.get_mechs_info(node)
 
         used_vars = dict()
         all_info = chan_info | conc_info | rec_info | con_in_info
         for info_name, info in all_info.items():
-            all_vars = list(set(info['States'].keys()) | set(info["Parameters"].keys()) | set(
-                info["Internals"].keys()))  # + [e.get_name() for e in info["Dependencies"]["global"]]
+            all_vars = list(set(info["States"].keys()) | set(info["Parameters"].keys()) | set(
+                info["Internals"].keys()))
             for var in all_vars:
                 if var not in used_vars.keys():
                     used_vars[var] = list()
