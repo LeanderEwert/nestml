@@ -54,7 +54,7 @@ class ASTMechanismInformationCollector(object):
         """Detects the root expressions (either ode or inline) of the given type and returns the initial
         info dictionary"""
         mechs_info = defaultdict()
-        if not FrontendConfiguration.get_target_platform().upper() == "NEST_COMPARTMENTAL":
+        if FrontendConfiguration.get_target_platform().upper() not in ["NEST_COMPARTMENTAL", "NEST_GPU_COMPARTMENTAL"]:
             return mechs_info
 
         mechanism_expressions = cls.collector_visitor.inlinesInEquationsBlock

@@ -21,7 +21,7 @@
  */
 #include "{{neuronSpecificFileNamesCmSyns["tree"]}}.h"
 
-nest::Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index)
+Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index)
   : xx_( 0.0 )
   , yy_( 0.0 )
   , comp_index( compartment_index )
@@ -43,7 +43,7 @@ nest::Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const lo
   *v_comp = el;
 }
 
-nest::Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index,
+Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index,
     double* v_comp_ref, double* ca__div__dt_ref, double* gl__times__el_ref, double* gg0_ref, double* gg_ref, double* ff_ref )
   : xx_( 0.0 )
   , yy_( 0.0 )
@@ -65,9 +65,9 @@ nest::Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const lo
 {
   *v_comp = el;
 }
-nest::Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const long compartment_index,
+Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const long compartment_index,
   const long parent_index,
-  const DictionaryDatum& compartment_params,
+  const nlohmann::json& compartment_params,
   double* v_comp_ref, double* ca__div__dt_ref, double* gl__times__el_ref, double* gg0_ref, double* gg_ref, double* ff_ref)
   : xx_( 0.0 )
   , yy_( 0.0 )
@@ -88,44 +88,34 @@ nest::Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const lo
   , n_passed( 0 )
 {
 
-  updateValue< double >( compartment_params, names::C_m, ca );
-  updateValue< double >( compartment_params, names::g_C, gc );
-  updateValue< double >( compartment_params, names::g_L, gl );
-  updateValue< double >( compartment_params, names::e_L, el );
+  if (compartment_params.contains("C_m")) ca = compartment_params["C_m"];
+  if (compartment_params.contains("g_C")) gc = compartment_params["g_C"];
+  if (compartment_params.contains("g_L")) gl = compartment_params["g_L"];
+  if (compartment_params.contains("e_L")) el = compartment_params["e_L"];
   double v_comp_update = el;
-  if( compartment_params->known( "v_comp" ) ) updateValue< double >( compartment_params, "v_comp", v_comp_update);
+  if (compartment_params.contains("v_comp")) v_comp_update = compartment_params["v_comp"];
 
   *v_comp = v_comp_update;
 }
 
 void
 {%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
-nest::Compartment{{cm_unique_suffix}}::calibrate()
+Compartment{{cm_unique_suffix}}::calibrate( double time_resolution )
 {%- else %}
-nest::Compartment{{cm_unique_suffix}}::pre_run_hook()
+Compartment{{cm_unique_suffix}}::pre_run_hook( double time_resolution )
 {%- endif %}
 {
 
-  const double dt = Time::get_resolution().get_ms();
+  const double dt = time_resolution;
   // used in vectorized passive loop
   *ca__div__dt = ca / dt;
   *gl__times__el = gl * el;
   *gg0 = *ca__div__dt + gl;
 }
 
-std::map< Name, double* >
-nest::Compartment{{cm_unique_suffix}}::get_recordables()
-{
-  std::map< Name, double* > recordables;
-
-  recordables[ Name( "v_comp" + std::to_string( comp_index ) ) ] = v_comp;
-
-  return recordables;
-}
-
 // for matrix construction
 void
-nest::Compartment{{cm_unique_suffix}}::construct_matrix_coupling_elements()
+Compartment{{cm_unique_suffix}}::construct_matrix_coupling_elements()
 {
   if ( parent != nullptr )
   {
@@ -141,7 +131,7 @@ nest::Compartment{{cm_unique_suffix}}::construct_matrix_coupling_elements()
 }
 
 
-nest::CompTree{{cm_unique_suffix}}::CompTree{{cm_unique_suffix}}()
+CompTree{{cm_unique_suffix}}::CompTree{{cm_unique_suffix}}()
   : root_( -1, -1 )
   , size_( 0 )
 {
@@ -155,7 +145,7 @@ nest::CompTree{{cm_unique_suffix}}::CompTree{{cm_unique_suffix}}()
  * Assumes parent of compartment is already added
  */
 void
-nest::CompTree{{cm_unique_suffix}}::add_compartment( const long parent_index )
+CompTree{{cm_unique_suffix}}::add_compartment( const long parent_index )
 {
   v_comp_vec.push_back(0.0);
   ca__div__dt_vec.push_back(0.0);
@@ -175,94 +165,94 @@ nest::CompTree{{cm_unique_suffix}}::add_compartment( const long parent_index )
 }
 
 void
-nest::CompTree{{cm_unique_suffix}}::add_compartment( const long parent_index, const DictionaryDatum& compartment_params )
+CompTree{{cm_unique_suffix}}::add_compartment( const long parent_index, const nlohmann::json& compartment_params )
 {
   //Check whether all passed parameters exist within the used neuron model:
-  Dictionary* comp_param_copy = new Dictionary(*compartment_params);
+  nlohmann::json comp_param_copy = compartment_params;
 
-  comp_param_copy->remove(names::C_m);
-  comp_param_copy->remove(names::g_C);
-  comp_param_copy->remove(names::g_L);
-  comp_param_copy->remove(names::e_L);
-  comp_param_copy->remove("v_comp");
+  comp_param_copy.erase("C_m");
+  comp_param_copy.erase("g_C");
+  comp_param_copy.erase("g_L");
+  comp_param_copy.erase("e_L");
+  comp_param_copy.erase("v_comp");
 {%- for ion_channel_name, channel_info in chan_info.items() %}
   {%- for variable_type, variable_info in channel_info["Parameters"].items() %}
         {%- set variable = variable_info["ASTVariable"] %}
-  if( comp_param_copy->known( "{{variable.name}}" ) ) comp_param_copy->remove("{{variable.name}}");
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
   {%- endfor %}
   {%- for variable_type, variable_info in channel_info["States"].items() %}
         {%- set variable = variable_info["ASTVariable"] %}
-  if( comp_param_copy->known( "{{variable.name}}" ) ) comp_param_copy->remove("{{variable.name}}");
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
   {%- endfor %}
   {%- for variable_type, variable_info in channel_info["ODEs"].items() %}
-  if( comp_param_copy->known( "{{variable_type}}" ) ) comp_param_copy->remove("{{variable_type}}");
+  if( comp_param_copy.contains( "{{variable_type}}" ) ) comp_param_copy.erase("{{variable_type}}");
   {%- endfor %}
 {%- endfor %}
 {%- for concentration_name, concentration_info in conc_info.items() %}
   {%- for variable_type, variable_info in concentration_info["Parameters"].items() %}
         {%- set variable = variable_info["ASTVariable"] %}
-  if( comp_param_copy->known( "{{variable.name}}" ) ) comp_param_copy->remove("{{variable.name}}");
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
   {%- endfor %}
 {%- endfor %}
 {%- for concentration_name, concentration_info in conc_info.items() %}
   {%- for variable_type, variable_info in concentration_info["States"].items() %}
         {%- set variable = variable_info["ASTVariable"] %}
-  if( comp_param_copy->known( "{{variable.name}}" ) ) comp_param_copy->remove("{{variable.name}}");
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
   {%- endfor %}
   {%- for variable_type, variable_info in concentration_info["ODEs"].items() %}
-  if( comp_param_copy->known( "{{variable_type}}" ) ) comp_param_copy->remove("{{variable_type}}");
+  if( comp_param_copy.contains( "{{variable_type}}" ) ) comp_param_copy.erase("{{variable_type}}");
   {%- endfor %}
 {%- endfor %}
 {%- for receptor_name, receptor_info in recs_info.items() %}
   {%- for variable_type, variable_info in receptor_info["Parameters"].items() %}
         {%- set variable = variable_info["ASTVariable"] %}
-  if( comp_param_copy->known( "{{variable.name}}" ) ) comp_param_copy->remove("{{variable.name}}");
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
   {%- endfor %}
 {%- endfor %}
 {%- for receptor_name, receptor_info in recs_info.items() %}
   {%- for variable_type, variable_info in receptor_info["States"].items() %}
         {%- set variable = variable_info["ASTVariable"] %}
-  if( comp_param_copy->known( "{{variable.name}}" ) ) comp_param_copy->remove("{{variable.name}}");
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
   {%- endfor %}
   {%- for variable_type, variable_info in receptor_info["ODEs"].items() %}
-  if( comp_param_copy->known( "{{variable_type}}" ) ) comp_param_copy->remove("{{variable_type}}");
+  if( comp_param_copy.contains( "{{variable_type}}" ) ) comp_param_copy.erase("{{variable_type}}");
   {%- endfor %}
 {%- endfor %}
 {%- for continuous_name, continuous_info in con_in_info.items() %}
   {%- for variable_type, variable_info in continuous_info["Parameters"].items() %}
         {%- set variable = variable_info["ASTVariable"] %}
-  if( comp_param_copy->known( "{{variable.name}}" ) ) comp_param_copy->remove("{{variable.name}}");
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
   {%- endfor %}
   {%- for variable_type, variable_info in continuous_info["ODEs"].items() %}
-  if( comp_param_copy->known( "{{variable_type}}" ) ) comp_param_copy->remove("{{variable_type}}");
+  if( comp_param_copy.contains( "{{variable_type}}" ) ) comp_param_copy.erase("{{variable_type}}");
   {%- endfor %}
 {%- endfor %}
 {%- for continuous_name, continuous_info in con_in_info.items() %}
   {%- for variable_type, variable_info in continuous_info["States"].items() %}
         {%- set variable = variable_info["ASTVariable"] %}
-  if( comp_param_copy->known( "{{variable.name}}" ) ) comp_param_copy->remove("{{variable.name}}");
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
   {%- endfor %}
 {%- endfor %}
 //global vars
   {%- for variable_type, variable_info in global_info["Parameters"].items() %}
       {%- set variable = variable_info["ASTVariable"] %}
-  if( comp_param_copy->known( "{{variable.name}}" ) ) comp_param_copy->remove("{{variable.name}}");
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
   {%- endfor %}
   {%- for variable_type, variable_info in global_info["ODEs"].items() %}
-  if( comp_param_copy->known( "{{variable_type}}" ) ) comp_param_copy->remove("{{variable_type}}");
+  if( comp_param_copy.contains( "{{variable_type}}" ) ) comp_param_copy.erase("{{variable_type}}");
   {%- endfor %}
   {%- for variable_type, variable_info in global_info["States"].items() %}
       {%- set variable = variable_info["ASTVariable"] %}
-  if( comp_param_copy->known( "{{variable.name}}" ) ) comp_param_copy->remove("{{variable.name}}");
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
   {%- endfor %}
 
-  if(!comp_param_copy->empty()){
+  if(!comp_param_copy.empty()){
     std::string msg = "Following parameters are invalid: ";
-    for(auto& param : *comp_param_copy){
-        msg += param.first.toString();
+    for(auto& param : comp_param_copy.items()){
+        msg += param.key();
         msg += "\n";
     }
-    throw BadParameter(msg);
+    throw std::runtime_error(msg);
   }
 
   v_comp_vec.push_back(0.0);
@@ -283,7 +273,7 @@ nest::CompTree{{cm_unique_suffix}}::add_compartment( const long parent_index, co
 }
 
 void
-nest::CompTree{{cm_unique_suffix}}::add_compartment( Compartment{{cm_unique_suffix}}* compartment, const long parent_index )
+CompTree{{cm_unique_suffix}}::add_compartment( Compartment{{cm_unique_suffix}}* compartment, const long parent_index )
 {
   size_++;
 
@@ -298,7 +288,7 @@ nest::CompTree{{cm_unique_suffix}}::add_compartment( Compartment{{cm_unique_suff
     if ( parent == nullptr )
     {
       std::string msg = "does not exist in tree, but was specified as a parent compartment";
-      throw UnknownCompartment( parent_index, msg );
+      throw std::runtime_error(msg);
     }
 
     parent->children.push_back( *compartment );
@@ -309,7 +299,7 @@ nest::CompTree{{cm_unique_suffix}}::add_compartment( Compartment{{cm_unique_suff
     if ( root_.comp_index >= 0 )
     {
       std::string msg = ", the root, has already been instantiated";
-      throw UnknownCompartment( root_.comp_index, msg );
+      throw std::runtime_error(msg);
     }
     root_ = *compartment;
   }
@@ -328,14 +318,14 @@ nest::CompTree{{cm_unique_suffix}}::add_compartment( Compartment{{cm_unique_suff
  * and also has the option to throw an error if no compartment corresponding to
  * `compartment_index` is found in the tree
  */
-nest::Compartment{{cm_unique_suffix}}*
-nest::CompTree{{cm_unique_suffix}}::get_compartment( const long compartment_index ) const
+Compartment{{cm_unique_suffix}}*
+CompTree{{cm_unique_suffix}}::get_compartment( const long compartment_index ) const
 {
   return get_compartment( compartment_index, get_root(), 1 );
 }
 
-nest::Compartment{{cm_unique_suffix}}*
-nest::CompTree{{cm_unique_suffix}}::get_compartment( const long compartment_index, Compartment{{cm_unique_suffix}}* compartment, const long raise_flag ) const
+Compartment{{cm_unique_suffix}}*
+CompTree{{cm_unique_suffix}}::get_compartment( const long compartment_index, Compartment{{cm_unique_suffix}}* compartment, const long raise_flag ) const
 {
   Compartment{{cm_unique_suffix}}* r_compartment = nullptr;
 
@@ -356,7 +346,7 @@ nest::CompTree{{cm_unique_suffix}}::get_compartment( const long compartment_inde
   if ( ( not r_compartment ) && raise_flag )
   {
     std::string msg = "does not exist in tree";
-    throw UnknownCompartment( compartment_index, msg );
+    throw std::runtime_error(msg);
   }
 
   return r_compartment;
@@ -368,8 +358,8 @@ nest::CompTree{{cm_unique_suffix}}::get_compartment( const long compartment_inde
  * function before CompTree{{cm_unique_suffix}}::init_pointers() is called will result in a segmentation
  * fault
  */
-nest::Compartment{{cm_unique_suffix}}*
-nest::CompTree{{cm_unique_suffix}}::get_compartment_opt( const long compartment_idx ) const
+Compartment{{cm_unique_suffix}}*
+CompTree{{cm_unique_suffix}}::get_compartment_opt( const long compartment_idx ) const
 {
   return compartments_[ compartment_idx ];
 }
@@ -378,7 +368,7 @@ nest::CompTree{{cm_unique_suffix}}::get_compartment_opt( const long compartment_
  * Initialize all tree structure pointers
  */
 void
-nest::CompTree{{cm_unique_suffix}}::init_pointers()
+CompTree{{cm_unique_suffix}}::init_pointers()
 {
   set_parents();
   set_compartments();
@@ -390,7 +380,7 @@ nest::CompTree{{cm_unique_suffix}}::init_pointers()
  * For each compartments, sets its pointer towards its parent compartment
  */
 void
-nest::CompTree{{cm_unique_suffix}}::set_parents()
+CompTree{{cm_unique_suffix}}::set_parents()
 {
   for ( auto compartment_idx_it = compartment_indices_.begin(); compartment_idx_it != compartment_indices_.end();
         ++compartment_idx_it )
@@ -407,7 +397,7 @@ nest::CompTree{{cm_unique_suffix}}::set_parents()
  * added by `add_compartment()`
  */
 void
-nest::CompTree{{cm_unique_suffix}}::set_compartments()
+CompTree{{cm_unique_suffix}}::set_compartments()
 {
   compartments_.clear();
 
@@ -422,7 +412,7 @@ nest::CompTree{{cm_unique_suffix}}::set_compartments()
  * Set pointer variables within a compartment
  */
 void
-nest::CompTree{{cm_unique_suffix}}::set_compartment_variables()
+CompTree{{cm_unique_suffix}}::set_compartment_variables()
 {
   //reset compartment pointers due to unsafe pointers in vectors when resizing during compartment creation
   for( size_t i = 0; i < v_comp_vec.size(); i++){
@@ -439,7 +429,7 @@ nest::CompTree{{cm_unique_suffix}}::set_compartment_variables()
  * Creates a vector of compartment pointers of compartments that are also leafs of the tree.
  */
 void
-nest::CompTree{{cm_unique_suffix}}::set_leafs()
+CompTree{{cm_unique_suffix}}::set_leafs()
 {
   leafs_.clear();
   for ( auto compartment_it = compartments_.begin(); compartment_it != compartments_.end(); ++compartment_it )
@@ -455,33 +445,9 @@ nest::CompTree{{cm_unique_suffix}}::set_leafs()
  * Initializes pointers for the spike buffers for all receptor receptors
  */
 void
-nest::CompTree{{cm_unique_suffix}}::set_syn_buffers( std::vector< RingBuffer >& syn_buffers )
+CompTree{{cm_unique_suffix}}::set_syn_buffers( std::vector< float >& syn_buffers )
 {
   neuron_currents.set_buffers( syn_buffers );
-}
-
-/**
- * Returns a map of variable names and pointers to the recordables
- */
-std::map< Name, double* >
-nest::CompTree{{cm_unique_suffix}}::get_recordables()
-{
-  std::map< Name, double* > recordables;
-
-  /**
-   * add recordables for all compartments, suffixed by compartment_idx,
-   * to "recordables"
-   */
-  for ( auto compartment_it = compartments_.begin(); compartment_it != compartments_.end(); ++compartment_it )
-  {
-    long comp_index = (*compartment_it)->comp_index;
-    std::map< Name, double* > recordables_comp = neuron_currents.get_recordables( comp_index );
-    recordables.insert( recordables_comp.begin(), recordables_comp.end() );
-
-    recordables_comp = ( *compartment_it )->get_recordables();
-    recordables.insert( recordables_comp.begin(), recordables_comp.end() );
-  }
-  return recordables;
 }
 
 /**
@@ -489,30 +455,30 @@ nest::CompTree{{cm_unique_suffix}}::get_recordables()
  */
 void
 {%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
-nest::CompTree{{cm_unique_suffix}}::calibrate()
+CompTree{{cm_unique_suffix}}::calibrate( double time_resolution )
 {%- else %}
-nest::CompTree{{cm_unique_suffix}}::pre_run_hook()
+CompTree{{cm_unique_suffix}}::pre_run_hook( double time_resolution )
 {%- endif %}
 {
   if ( root_.comp_index < 0 )
   {
     std::string msg = "does not exist in tree, meaning that no compartments have been added";
-    throw UnknownCompartment( 0, msg );
+    throw std::runtime_error(msg);
   }
 
   // initialize the compartments
   for ( auto compartment_it = compartments_.begin(); compartment_it != compartments_.end(); ++compartment_it )
   {
 {%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
-    ( *compartment_it )->calibrate();
+    ( *compartment_it )->calibrate( time_resolution );
 {%- else %}
-    ( *compartment_it )->pre_run_hook();
+    ( *compartment_it )->pre_run_hook( time_resolution );
 {%- endif %}
   }
 {%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
-    neuron_currents.calibrate();
+    neuron_currents.calibrate( time_resolution );
 {%- else %}
-    neuron_currents.pre_run_hook();
+    neuron_currents.pre_run_hook( time_resolution );
 {%- endif %}
 }
 
@@ -520,7 +486,7 @@ nest::CompTree{{cm_unique_suffix}}::pre_run_hook()
  * Returns vector of voltage values, indices correspond to compartments in `compartments_`
  */
 std::vector< double >
-nest::CompTree{{cm_unique_suffix}}::get_voltage() const
+CompTree{{cm_unique_suffix}}::get_voltage() const
 {
   return v_comp_vec;
 }
@@ -529,7 +495,7 @@ nest::CompTree{{cm_unique_suffix}}::get_voltage() const
  * Return voltage of single compartment voltage, indicated by the compartment_index
  */
 double
-nest::CompTree{{cm_unique_suffix}}::get_compartment_voltage( const long compartment_index )
+CompTree{{cm_unique_suffix}}::get_compartment_voltage( const long compartment_index )
 {
   return *(compartments_[ compartment_index ]->v_comp);
 }
@@ -538,7 +504,7 @@ nest::CompTree{{cm_unique_suffix}}::get_compartment_voltage( const long compartm
  * Construct the matrix equation to be solved to advance the model one timestep
  */
 void
-nest::CompTree{{cm_unique_suffix}}::construct_matrix( const long lag )
+CompTree{{cm_unique_suffix}}::construct_matrix( const long lag )
 {
   // compute all channel currents, receptor currents, and input currents
   std::vector< std::pair< double, double > > comps_gi = neuron_currents.f_numstep( v_comp_vec, lag );
@@ -564,7 +530,7 @@ nest::CompTree{{cm_unique_suffix}}::construct_matrix( const long lag )
  * Solve matrix with O(n) algorithm
  */
 void
-nest::CompTree{{cm_unique_suffix}}::solve_matrix()
+CompTree{{cm_unique_suffix}}::solve_matrix()
 {
   std::vector< Compartment{{cm_unique_suffix}}* >::iterator leaf_it = leafs_.begin();
 
@@ -576,7 +542,7 @@ nest::CompTree{{cm_unique_suffix}}::solve_matrix()
 }
 
 void
-nest::CompTree{{cm_unique_suffix}}::solve_matrix_downsweep( Compartment{{cm_unique_suffix}}* compartment, std::vector< Compartment{{cm_unique_suffix}}* >::iterator leaf_it )
+CompTree{{cm_unique_suffix}}::solve_matrix_downsweep( Compartment{{cm_unique_suffix}}* compartment, std::vector< Compartment{{cm_unique_suffix}}* >::iterator leaf_it )
 {
   // compute the input output transformation at compartment
   std::pair< double, double > output = compartment->io();
@@ -608,7 +574,7 @@ nest::CompTree{{cm_unique_suffix}}::solve_matrix_downsweep( Compartment{{cm_uniq
 }
 
 void
-nest::CompTree{{cm_unique_suffix}}::solve_matrix_upsweep( Compartment{{cm_unique_suffix}}* compartment, double vv )
+CompTree{{cm_unique_suffix}}::solve_matrix_upsweep( Compartment{{cm_unique_suffix}}* compartment, double vv )
 {
   // compute compartment voltage
   vv = compartment->calc_v( vv );
@@ -623,7 +589,7 @@ nest::CompTree{{cm_unique_suffix}}::solve_matrix_upsweep( Compartment{{cm_unique
  * Print the tree graph
  */
 void
-nest::CompTree{{cm_unique_suffix}}::print_tree() const
+CompTree{{cm_unique_suffix}}::print_tree() const
 {
   // loop over all compartments
   std::printf( ">>> CM tree with %d compartments <<<\n", int( compartments_.size() ) );

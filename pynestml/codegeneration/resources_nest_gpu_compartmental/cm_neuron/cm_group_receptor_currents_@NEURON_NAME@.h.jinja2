@@ -27,8 +27,8 @@ along with NEST.  If not, see <http://www.gnu.org/licenses/>.
 #include <stdlib.h>
 #include <vector>
 #include <cmath>
-
-#include "ring_buffer.h"
+#include <string>
+#include <nlohmann/json.hpp>
 
 {% macro render_variable_type(variable) -%}
 {%- with -%}
@@ -76,13 +76,6 @@ enum {{ receptor_name }}VarIndexes
         {%- endfor %}
     {%- endfor %}
 
-    {%- for variable_info in receptor_info["SecondaryInlineExpressions"] %}
-        {%- if variable_info.is_recordable %}
-        {%- set variable = variable_info.variable_name %}
-  i_{{ variable }},
-        {%- endif %}
-    {%- endfor %}
-
   i_v_comp,
   i_s_val,
   i_i_tot_{{ receptor_name }},
@@ -91,7 +84,7 @@ enum {{ receptor_name }}VarIndexes
   i_i_tot_dv,
   i_d_i_tot_dv,
   N_{{ receptor_name }}_VARS
-}
+};
 
 enum {{ receptor_name }}ParamIndexes
 {
@@ -104,7 +97,7 @@ enum {{ receptor_name }}ParamIndexes
     {%- endfor %}
 
   N_{{ receptor_name }}_PARAM
-}
+};
 
 class {{receptor_name}}{{cm_unique_suffix}}{
 private:
@@ -134,22 +127,15 @@ private:
     {%- for pure_variable_name, variable_info in receptor_info["States"].items() %}
         {%- set variable = variable_info["ASTVariable"] %}
         {%- set rhs_expression = variable_info["rhs_expression"] %}
-  std::vector<{{ render_variable_type(variable) }}> {{ variable.name }} = {}
-        };
-    {%- endfor %}
-
-    // recordable inlines
-    {%- for variable_info in receptor_info["SecondaryInlineExpressions"] %}
-        {%- if variable_info.is_recordable %}
-        {%- set variable = variable_info.variable_name %}
-        {%- set rhs_expression = variable_info.expression %}
-    std::vector< double > {{ variable }} = {};
-        {%- endif %}
+  std::vector<{{ render_variable_type(variable) }}> {{ variable.name }} = {};
     {%- endfor %}
 
   std::vector < double > s_val = {};
 
   std::vector< double > i_tot_{{receptor_name}} = {};
+  std::vector< double > g_val = {};
+  std::vector< double > i_val = {};
+  std::vector< double > d_i_tot_dv = {};
 
   // user declared internals in order they were declared, initialized via pre_run_hook() or calibrate()
   {%- for internal_name, internal_declaration in receptor_info["internals_used_declared"] %}
@@ -176,35 +162,28 @@ private:
 
 //model specific states
     {%- for variable_name, variable_info in receptor_info["States"].items() %}
-  double* GPU_{{ variable_name }},
+  double* GPU_{{ variable_name }};
     {%- endfor %}
 
     {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
         {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["propagators"].items()%}
-  double* GPU_{{state_variable_name}},
+  double* GPU_{{state_variable_name}};
         {%- endfor %}
     {%- endfor %}
 
     {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
         {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items()%}
-  double* GPU_{{state_variable_name}},
+  double* GPU_{{state_variable_name}};
         {%- endfor %}
-    {%- endfor %}
-
-    {%- for variable_info in receptor_info["SecondaryInlineExpressions"] %}
-        {%- if variable_info.is_recordable %}
-        {%- set variable = variable_info.variable_name %}
-  double* GPU_{{ variable }},
-        {%- endif %}
     {%- endfor %}
 
 //model specific parameters
     {%- for param_name, param_declaration in receptor_info["Parameters"].items() %}
-  double* GPU_{{param_name}},
+  double* GPU_{{param_name}};
     {%- endfor %}
 
     {%- for internal_name, internal_declaration in receptor_info["internals_used_declared"] %}
-  double* GPU_{{internal_name}},
+  double* GPU_{{internal_name}};
     {%- endfor %}
 
 public:
@@ -226,16 +205,15 @@ public:
                         {% endif %}{% for inline in receptor_info["Dependencies"]["channels"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if receptor_info["Dependencies"]["continuous"]|length %}
                         {% endif %}{% for inline in receptor_info["Dependencies"]["continuous"] %}, std::vector< double > {{inline.variable_name}}{% endfor %});
 
-    void f_update();
-    void f_self_spike();
+    void f_update(double time_resolution);
+    void f_self_spike(double time_resolution);
 
   // calibration
 {%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
-  void calibrate();
+  void calibrate(double time_resolution);
 {%- else %}
-  void pre_run_hook();
+  void pre_run_hook(double time_resolution);
 {%- endif %}
-  void append_recordables(std::map< Name, double* >* recordables, const long compartment_idx);
   void set_buffer_ptr( std::vector< float >& rec_buffers )
   {
     for(std::size_t i = 0; i < rec_idx.size(); i++){
@@ -252,6 +230,19 @@ public:
 
     // root_inline getter
     void get_currents_per_compartment(std::vector< double >& compartment_to_current);
+    void debug_print_i_tot(const std::string& mechanism_name, const std::size_t neuron_index, const long lag) const
+    {
+      for (std::size_t recs_id = 0; recs_id < neuron_{{ receptor_name }}_receptor_count; ++recs_id)
+      {
+        std::cout << "[{{neuronName}} debug] neuron=" << neuron_index
+                  << " lag=" << lag
+                  << " mechanism=" << mechanism_name
+                  << " receptor_index=" << rec_idx[recs_id]
+                  << " compartment=" << compartment_association[recs_id]
+                  << " i_tot=" << i_tot_{{receptor_name}}[recs_id]
+                  << std::endl;
+      }
+    }
 
     std::vector< double > distribute_shared_vector(std::vector< double > shared_vector);
 
@@ -342,47 +333,47 @@ public:
   ~NeuronCurrents{{cm_unique_suffix}}(){};
 
 {%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
-  void calibrate() {
+  void calibrate(double time_resolution) {
 {%- else %}
-  void pre_run_hook() {
+  void pre_run_hook(double time_resolution) {
 {%- endif %}
     if(!initialized){
     // initialization of ion channels
 {%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
     {%- for ion_channel_name, channel_info in chan_info.items() %}
-    {{ion_channel_name}}{{channel_suffix}}.calibrate();
+    {{ion_channel_name}}{{channel_suffix}}.calibrate(time_resolution);
     {% endfor -%}
     {%- for concentration_name, concentration_info in conc_info.items() %}
-    {{concentration_name}}{{concentration_suffix}}.calibrate();
+    {{concentration_name}}{{concentration_suffix}}.calibrate(time_resolution);
     {% endfor -%}
     {%- for receptor_name, receptor_info in recs_info.items() %}
-    {{receptor_name}}{{receptor_suffix}}.calibrate();
+    {{receptor_name}}{{receptor_suffix}}.calibrate(time_resolution);
     {% endfor -%}
     {%- for receptor_name, receptor_info in recs_info.items() %}
     {%- for synapse_name, synapse_info in syns_info.items() %}
-    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.calibrate();
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.calibrate(time_resolution);
     {% endfor -%}
     {% endfor -%}
     {%- for continuous_name, continuous_info in con_in_info.items() %}
-    {{continuous_name}}{{continuous_suffix}}.calibrate();
+    {{continuous_name}}{{continuous_suffix}}.calibrate(time_resolution);
     {% endfor -%}
 {%- else %}
     {%- for ion_channel_name, channel_info in chan_info.items() %}
-    {{ion_channel_name}}{{channel_suffix}}.pre_run_hook();
+    {{ion_channel_name}}{{channel_suffix}}.pre_run_hook(time_resolution);
     {% endfor -%}
     {%- for concentration_name, concentration_info in conc_info.items() %}
-    {{concentration_name}}{{concentration_suffix}}.pre_run_hook();
+    {{concentration_name}}{{concentration_suffix}}.pre_run_hook(time_resolution);
     {% endfor -%}
     {%- for receptor_name, receptor_info in recs_info.items() %}
-    {{receptor_name}}{{receptor_suffix}}.pre_run_hook();
+    {{receptor_name}}{{receptor_suffix}}.pre_run_hook(time_resolution);
     {% endfor -%}
     {%- for receptor_name, receptor_info in recs_info.items() %}
     {%- for synapse_name, synapse_info in syns_info.items() %}
-    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.pre_run_hook();
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.pre_run_hook(time_resolution);
     {% endfor -%}
     {% endfor -%}
     {%- for continuous_name, continuous_info in con_in_info.items() %}
-    {{continuous_name}}{{continuous_suffix}}.pre_run_hook();
+    {{continuous_name}}{{continuous_suffix}}.pre_run_hook(time_resolution);
     {% endfor -%}
 {%- endif %}
 
@@ -641,38 +632,16 @@ public:
     {% endfor -%}
   };
 
-  std::map< Name, double* > get_recordables( const long compartment_idx )
+  void debug_print_receptor_currents(const std::size_t neuron_index, const long lag) const
   {
-    std::map< Name, double* > recordables;
-
-    // append ion channel state variables to recordables
-    {%- for ion_channel_name, channel_info in chan_info.items() %}
-    {{ion_channel_name}}{{channel_suffix}}.append_recordables( &recordables, compartment_idx );
-    {% endfor %}
-
-    // append concentration state variables to recordables
-    {%- for concentration_name, concentration_info in conc_info.items() %}
-    {{concentration_name}}{{concentration_suffix}}.append_recordables( &recordables, compartment_idx );
-    {% endfor %}
-
-    // append receptor state variables to recordables
     {%- for receptor_name, receptor_info in recs_info.items() %}
-    {{receptor_name}}{{receptor_suffix}}.append_recordables( &recordables, compartment_idx );
-    {% endfor %}
-
-    // append receptor with synapse state variables to recordables
+    {{receptor_name}}{{receptor_suffix}}.debug_print_i_tot("{{receptor_name}}", neuron_index, lag);
+    {% endfor -%}
     {%- for receptor_name, receptor_info in recs_info.items() %}
     {%- for synapse_name, synapse_info in syns_info.items() %}
-    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.append_recordables( &recordables, compartment_idx );
-    {% endfor %}
-    {% endfor %}
-
-    // append continuous input state variables to recordables
-    {%- for continuous_name, continuous_info in con_in_info.items() %}
-    {{continuous_name}}{{continuous_suffix}}.append_recordables( &recordables, compartment_idx );
-    {% endfor %}
-
-    return recordables;
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.debug_print_i_tot("{{receptor_name}}_con_{{synapse_name}}", neuron_index, lag);
+    {% endfor -%}
+    {% endfor -%}
   };
 
   std::vector< std::pair< double, double > > f_numstep( std::vector< double > v_comp_vec, const long lag )
@@ -849,22 +818,22 @@ public:
     return comp_to_gi;
   };
 
-  void postsynaptic_synaptic_processing(){
+  void postsynaptic_synaptic_processing(double time_resolution){
     {%- for receptor_name, receptor_info in recs_info.items() %}
         {%- for synapse_name, synapse_info in syns_info.items() %}
     {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.postsynaptic_synaptic_processing();
-    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.f_self_spike();
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.f_self_spike(time_resolution);
         {% endfor -%}
-    {{receptor_name}}{{receptor_suffix}}.f_self_spike();
+    {{receptor_name}}{{receptor_suffix}}.f_self_spike(time_resolution);
     {% endfor -%}
     {%- for ion_channel_name, channel_info in chan_info.items() %}
-    {{ion_channel_name}}{{channel_suffix}}.f_self_spike();
+    {{ion_channel_name}}{{channel_suffix}}.f_self_spike(time_resolution);
     {% endfor -%}
     {%- for concentration_name, concentration_info in conc_info.items() %}
-    {{concentration_name}}{{concentration_suffix}}.f_self_spike();
+    {{concentration_name}}{{concentration_suffix}}.f_self_spike(time_resolution);
     {% endfor -%}
     {%- for continuous_name, continuous_info in con_in_info.items() %}
-    {{continuous_name}}{{continuous_suffix}}.f_self_spike();
+    {{continuous_name}}{{continuous_suffix}}.f_self_spike(time_resolution);
     {% endfor -%}
   };
 };

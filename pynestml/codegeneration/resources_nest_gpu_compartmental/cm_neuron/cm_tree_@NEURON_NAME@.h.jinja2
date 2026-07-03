@@ -51,30 +51,16 @@ along with NEST.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <stdlib.h>
 
-#include "nest_time.h"
-#include "ring_buffer.h"
+#include <nlohmann/json.hpp>
 
 // compartmental model
 #include "{{neuronSpecificFileNamesCmSyns["neuroncurrents"]}}.h"
 
-// Includes from libnestutil:
-#include "dict_util.h"
-#include "numerics.h"
-
 // Includes from nestkernel:
-#include "exceptions.h"
-#include "kernel_manager.h"
-#include "universal_data_logger_impl.h"
-
-// Includes from sli:
-#include "dict.h"
-#include "dictutils.h"
+#include <stdexcept>
 
 #include <functional>
-
-
-namespace nest
-{
+#include <string>
 
 class Compartment{{cm_unique_suffix}}
 {
@@ -93,7 +79,7 @@ public:
   std::vector< Compartment{{cm_unique_suffix}} > children;
 
   // buffer for currents
-  RingBuffer currents;
+  std::vector<double> currents;
   // voltage variable
   double* v_comp;
   // electrical parameters
@@ -116,18 +102,16 @@ public:
   Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index);
   Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index,
     double* v_comp_ref, double* ca__div__dt_ref, double* gl__times__el_ref, double* gg0_ref, double* gg_ref, double* ff_ref);
-  Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index, const DictionaryDatum& compartment_params,
+  Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index, const nlohmann::json& compartment_params,
     double* v_comp_ref, double* ca__div__dt_ref, double* gl__times__el_ref, double* gg0_ref, double* gg_ref, double* ff_ref);
   ~Compartment{{cm_unique_suffix}}(){};
 
   // initialization
 {%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
-  void calibrate();
+  void calibrate( double time_resolution );
 {%- else %}
-  void pre_run_hook();
+  void pre_run_hook( double time_resolution );
 {%- endif %}
-  std::map< Name, double* > get_recordables();
-
   // matrix construction
   void construct_matrix_coupling_elements();
 
@@ -141,13 +125,13 @@ public:
 Short helper functions for solving the matrix equation. Can hopefully be inlined
 */
 inline void
-nest::Compartment{{cm_unique_suffix}}::gather_input( const std::pair< double, double >& in )
+Compartment{{cm_unique_suffix}}::gather_input( const std::pair< double, double >& in )
 {
   xx_ += in.first;
   yy_ += in.second;
 }
 inline std::pair< double, double >
-nest::Compartment{{cm_unique_suffix}}::io()
+Compartment{{cm_unique_suffix}}::io()
 {
   // include inputs from child compartments
   *gg -= xx_;
@@ -160,7 +144,7 @@ nest::Compartment{{cm_unique_suffix}}::io()
   return std::make_pair( g_val, f_val );
 }
 inline double
-nest::Compartment{{cm_unique_suffix}}::calc_v( const double v_in )
+Compartment{{cm_unique_suffix}}::calc_v( const double v_in )
 {
   // reset recursion variables
   xx_ = 0.0;
@@ -213,18 +197,16 @@ public:
 
   // initialization functions for tree structure
   void add_compartment( const long parent_index );
-  void add_compartment( const long parent_index, const DictionaryDatum& compartment_params );
+  void add_compartment( const long parent_index, const nlohmann::json& compartment_params );
   void add_compartment( Compartment{{cm_unique_suffix}}* compartment, const long parent_index );
 {%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
-  void calibrate();
+  void calibrate( double time_resolution );
 {%- else %}
-  void pre_run_hook();
+  void pre_run_hook( double time_resolution );
 {%- endif %}
 
   void init_pointers();
-  void set_syn_buffers( std::vector< RingBuffer >& syn_buffers );
-  std::map< Name, double* > get_recordables();
-
+  void set_syn_buffers( std::vector< float >& syn_buffers );
   // get a compartment pointer from the tree
   Compartment{{cm_unique_suffix}}* get_compartment( const long compartment_index ) const;
   Compartment{{cm_unique_suffix}}* get_compartment( const long compartment_index, Compartment{{cm_unique_suffix}}* compartment, const long raise_flag ) const;
@@ -254,7 +236,5 @@ public:
   // print function
   void print_tree() const;
 }; // CompTree
-
-} // namespace
 
 #endif /* #ifndef CM_TREE_{{cm_unique_suffix | upper }}_H */

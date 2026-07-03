@@ -49,14 +49,18 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
         "path": "resources_nest_gpu_compartmental/cm_neuron",
         "model_templates": {
             "neuron": [
+                "@NEURON_NAME@.cu.jinja2",
+                "@NEURON_NAME@.h.jinja2",
                 "cm_group_receptor_currents_@NEURON_NAME@.cu.jinja2",
                 "cm_group_receptor_currents_@NEURON_NAME@.h.jinja2",
+                "cm_tree_@NEURON_NAME@.cpp.jinja2",
+                "cm_tree_@NEURON_NAME@.h.jinja2",
             ]
         },
         "module_templates": [],
     }
     _default_options["nest_gpu_path"] = None
-    _default_options["register_neuron_model"] = False
+    _default_options["register_neuron_model"] = True
     _default_options["skip_build"] = False
 
     def __init__(self, options: Optional[Mapping[str, Any]] = None):
@@ -73,6 +77,12 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
                                LoggingLevel.INFO)
         else:
             self.nest_gpu_path = self.get_option("nest_gpu_path")
+
+    def set_options(self, options: Mapping[str, Any]) -> Mapping[str, Any]:
+        ret = super().set_options(options)
+        if options and "nest_gpu_path" in options:
+            self.nest_gpu_path = self.get_option("nest_gpu_path")
+        return ret
 
     def get_cm_syns_neuroncurrents_file_prefix(self, neuron: ASTModel):
         return "cm_group_receptor_currents_" + neuron.get_name()
@@ -92,9 +102,9 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
         """
         Prepare the NEST-GPU source tree for recompilation.
 
-        The current default template set only emits receptor/current support
-        files, so model registration in neuron_models.h/.cu is opt-in until the
-        target produces a complete BaseNeuron implementation.
+        The generated BaseNeuron wrapper references the NEST-GPU model enum, so
+        registration in neuron_models.h/.cu is enabled by default for real
+        builds. Tests can disable it when using a fake NEST-GPU source tree.
         """
         self.copy_models_from_target_path()
         self.add_files_to_makefile()
@@ -104,7 +114,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
 
     def copy_models_from_target_path(self):
         dst_path = os.path.join(self.nest_gpu_path, "src")
-        for pattern in ["*.h", "*.cu"]:
+        for pattern in ["*.h", "*.cu", "*.cpp"]:
             for file_path in glob.glob(os.path.join(FrontendConfiguration.get_target_path(), pattern)):
                 shutil.copy(file_path, dst_path)
 
@@ -113,7 +123,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
         shutil.copy(cmakelists_path, cmakelists_path + ".bak")
 
         generated_files = []
-        for pattern in ["*.h", "*.cu"]:
+        for pattern in ["*.h", "*.cu", "*.cpp"]:
             for file_path in sorted(glob.glob(os.path.join(FrontendConfiguration.get_target_path(), pattern))):
                 generated_files.append("\n    " + os.path.basename(file_path))
         generated_files = "".join(generated_files) + "\n"
@@ -133,7 +143,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
             neuron_names.append("\n, \"" + neuron.get_name() + "\"")
 
         NESTGPUCodeGeneratorUtils.replace_text_between_tags(neuron_models_h_path, "".join(neuron_indexes) + "\n")
-        NESTGPUCodeGeneratorUtils.replace_text_between_tags(neuron_models_h_path, "".join(neuron_names) + "\n", rfind=True)
+        NESTGPUCodeGeneratorUtils.replace_text_between_tags(neuron_models_h_path, "".join(neuron_names) + ",\n", rfind=True)
 
     def add_model_to_neuron_class(self, neurons: Sequence[ASTModel]):
         neuron_models_cu_path = os.path.join(self.nest_gpu_path, "src", "neuron_models.cu")
@@ -158,6 +168,11 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
 class _CompartmentalCUDAPrinter:
     def __init__(self, neuron: ASTModel, printer):
         self.printer_factory = ASTPreAndSuffixSetterAndPrinterFactory(neuron, printer)
+        self.parameter_names = {
+            symbol.get_symbol_name()
+            for symbol in list(neuron.get_parameter_symbols()) + list(neuron.get_internal_symbols())
+            if symbol.get_symbol_name() != "__h" and not symbol.get_symbol_name().startswith("__P__")
+        }
 
     def print(self, expression, index: str = "i", array_name: str = "y", black_list=None):
         black_list = black_list or []
@@ -166,7 +181,13 @@ class _CompartmentalCUDAPrinter:
             suffix="+" + index + "]",
             black_list=black_list,
         )
-        return index_printer.print(expression)
+        code = index_printer.print(expression)
+        if array_name != "param":
+            for parameter_name in self.parameter_names:
+                code = code.replace(
+                    array_name + "[i_" + parameter_name + "+" + index + "]",
+                    "param[i_" + parameter_name + "+" + index + "]")
+        return code
 
     def printer(self, index: str = "i", black_list=None):
         black_list = black_list or []
