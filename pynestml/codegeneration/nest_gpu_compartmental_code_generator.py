@@ -53,6 +53,8 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
                 "@NEURON_NAME@.h.jinja2",
                 "cm_group_receptor_currents_@NEURON_NAME@.cu.jinja2",
                 "cm_group_receptor_currents_@NEURON_NAME@.h.jinja2",
+                "cm_group_channel_currents_@NEURON_NAME@.cu.jinja2",
+                "cm_group_channel_currents_@NEURON_NAME@.h.jinja2",
                 "cm_group_currents_@NEURON_NAME@.h.jinja2",
                 "cm_tree_@NEURON_NAME@.cpp.jinja2",
                 "cm_tree_@NEURON_NAME@.h.jinja2",
@@ -91,6 +93,9 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
     def get_cm_syns_receptorcurrents_file_prefix(self, neuron: ASTModel):
         return "cm_group_receptor_currents_" + neuron.get_name()
 
+    def get_cm_syns_channelcurrents_file_prefix(self, neuron: ASTModel):
+        return "cm_group_channel_currents_" + neuron.get_name()
+
     def _get_module_namespace(self, neurons: Sequence[ASTModel]) -> Dict:
         namespace = super()._get_module_namespace(neurons)
         namespace["is_gpu_compartmental"] = True
@@ -98,6 +103,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
             namespace["perNeuronFileNamesCm"][neuron.get_name()].update({
                 "groupcurrents": self.get_cm_syns_neuroncurrents_file_prefix(neuron),
                 "receptorcurrents": self.get_cm_syns_receptorcurrents_file_prefix(neuron),
+                "channelcurrents": self.get_cm_syns_channelcurrents_file_prefix(neuron),
             })
         return namespace
 
@@ -107,6 +113,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
         namespace["neuronSpecificFileNamesCmSyns"].update({
             "groupcurrents": self.get_cm_syns_neuroncurrents_file_prefix(neuron),
             "receptorcurrents": self.get_cm_syns_receptorcurrents_file_prefix(neuron),
+            "channelcurrents": self.get_cm_syns_channelcurrents_file_prefix(neuron),
         })
         namespace["cuda_printer"] = _CompartmentalCUDAPrinter(neuron, self._printer_no_origin)
         return namespace

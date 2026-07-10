@@ -52,7 +52,14 @@ int {{neuronName}}::Init(int i_node_0, int n_node, int /*n_port*/, int i_group)
   {
     param_arr_ = nullptr;
   }
-  AllocVarArr();
+  if (n_var_ > 0)
+  {
+    AllocVarArr();
+  }
+  else
+  {
+    var_arr_ = nullptr;
+  }
 
   scal_var_name_ = {{neuronName}}_scal_var_name;
   scal_param_name_ = {{neuronName}}_scal_param_name;
@@ -116,6 +123,7 @@ int {{neuronName}}::Update(long long /*it*/, double t1)
                 << " lag=" << lag
                 << " v_comp=" << v_comp
                 << std::endl;
+      state.c_tree.neuron_currents.debug_print_channel_currents(i, lag);
       state.c_tree.neuron_currents.debug_print_receptor_currents(i, lag);
 
       if (v_comp >= state.V_th && v_0_prev < state.V_th)

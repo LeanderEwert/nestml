@@ -1,0 +1,14 @@
+model cm_channel_only:
+
+    state:
+        v_comp real = 0
+
+    parameters:
+        e_leak real = -70.0
+        gbar_leak real = 0.1
+
+    equations:
+        inline leak real = gbar_leak * (e_leak - v_comp) @mechanism::channel
+
+    output:
+        spike
