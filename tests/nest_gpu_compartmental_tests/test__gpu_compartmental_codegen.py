@@ -31,6 +31,7 @@ class TestNESTGPUCompartmentalCodeGenerator:
     generated_files = {
         "cm_ampa_only_nestml.cu",
         "cm_ampa_only_nestml.h",
+        "cm_group_currents_cm_ampa_only_nestml.h",
         "cm_group_receptor_currents_cm_ampa_only_nestml.cu",
         "cm_group_receptor_currents_cm_ampa_only_nestml.h",
         "cm_tree_cm_ampa_only_nestml.cpp",
