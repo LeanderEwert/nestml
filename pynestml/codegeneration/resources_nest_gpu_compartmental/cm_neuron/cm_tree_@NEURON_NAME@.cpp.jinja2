@@ -368,12 +368,13 @@ CompTree{{cm_unique_suffix}}::get_compartment_opt( const long compartment_idx ) 
  * Initialize all tree structure pointers
  */
 void
-CompTree{{cm_unique_suffix}}::init_pointers()
+CompTree{{cm_unique_suffix}}::init_pointers(int* global_self_spikes)
 {
   set_parents();
   set_compartments();
   set_compartment_variables();
   set_leafs();
+  neuron_currents.init_pointers(global_self_spikes);
 }
 
 /**

@@ -102,15 +102,20 @@ class {{neuronName}} : public BaseNeuron
     HostNeuronState()
       : c_tree()
       , syn_buffers(0)
+      , self_spikes(0)
+      , GPU_self_spikes(nullptr)
       , V_th(-55.0)
     {
     }
 
     CompTree{{cm_unique_suffix}} c_tree;
     std::vector<float> syn_buffers;
+    int self_spikes;
+    int* GPU_self_spikes;
     double V_th;
   };
 
+  void ensure_self_spike_buffer(HostNeuronState& state);
   void read_spikes(HostNeuronState& state, int i_neuron, size_t n_port_var);
   void set_status(HostNeuronState& state, const nlohmann::json& statusdict);
   void add_compartment_(HostNeuronState& state, const nlohmann::json& dd);

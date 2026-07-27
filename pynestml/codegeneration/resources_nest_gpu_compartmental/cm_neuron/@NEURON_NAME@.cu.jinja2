@@ -71,6 +71,10 @@ int {{neuronName}}::Init(int i_node_0, int n_node, int /*n_port*/, int i_group)
   h_ = group_param_[i_h0_rel] * 0.1;
   time_resolution_ = 0.1;
   neurons_.resize(n_node);
+  for (auto& state : neurons_)
+  {
+    ensure_self_spike_buffer(state);
+  }
 
   float input_weight = 1.0;
   gpuErrchk(cudaMalloc(&port_weight_arr_, sizeof(float)));
@@ -94,7 +98,8 @@ int {{neuronName}}::Calibrate(double /*time_min*/, float time_resolution)
   time_resolution_ = time_resolution;
   for (auto& state : neurons_)
   {
-    state.c_tree.init_pointers();
+    ensure_self_spike_buffer(state);
+    state.c_tree.init_pointers(state.GPU_self_spikes);
     state.c_tree.set_syn_buffers(state.syn_buffers);
     state.c_tree.pre_run_hook(time_resolution_);
   }
@@ -113,6 +118,9 @@ int {{neuronName}}::Update(long long /*it*/, double t1)
 
     for (long lag = to_step - 1; lag < to_step; ++lag)
     {
+      state.self_spikes = 0;
+      gpuErrchk(cudaMemcpy(state.GPU_self_spikes, &state.self_spikes, sizeof(int), cudaMemcpyHostToDevice));
+
       const double v_0_prev = *(state.c_tree.get_root()->v_comp);
 
       state.c_tree.construct_matrix(lag);
@@ -134,6 +142,8 @@ int {{neuronName}}::Update(long long /*it*/, double t1)
                   << " v_comp=" << v_comp
                   << " V_th=" << state.V_th
                   << std::endl;
+        state.self_spikes = 1;
+        gpuErrchk(cudaMemcpy(state.GPU_self_spikes, &state.self_spikes, sizeof(int), cudaMemcpyHostToDevice));
         state.c_tree.neuron_currents.postsynaptic_synaptic_processing(time_resolution_);
       }
     }
@@ -147,8 +157,18 @@ int {{neuronName}}::SetNeuronVariablesDict(int i_neuron, int n_neuron, nlohmann:
   {
     neurons_.resize(n_neuron);
   }
+  ensure_self_spike_buffer(neurons_[i_neuron]);
   set_status(neurons_[i_neuron], dict);
   return 0;
+}
+
+void {{neuronName}}::ensure_self_spike_buffer(HostNeuronState& state)
+{
+  if (state.GPU_self_spikes == nullptr)
+  {
+    gpuErrchk(cudaMalloc(&state.GPU_self_spikes, sizeof(int)));
+  }
+  gpuErrchk(cudaMemcpy(state.GPU_self_spikes, &state.self_spikes, sizeof(int), cudaMemcpyHostToDevice));
 }
 
 void {{neuronName}}::set_status(HostNeuronState& state, const nlohmann::json& statusdict)

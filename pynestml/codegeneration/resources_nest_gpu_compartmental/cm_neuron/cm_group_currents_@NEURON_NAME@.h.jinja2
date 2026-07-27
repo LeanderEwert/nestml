@@ -101,6 +101,21 @@ public:
   GroupCurrents{{cm_unique_suffix}}(){};
   ~GroupCurrents{{cm_unique_suffix}}(){};
 
+  void init_pointers(int* global_self_spikes)
+  {
+    {%- for ion_channel_name, channel_info in chan_info.items() %}
+    {{ion_channel_name}}{{channel_suffix}}.init_pointers(global_self_spikes);
+    {% endfor -%}
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    {{receptor_name}}{{receptor_suffix}}.init_pointers(global_self_spikes);
+    {% endfor -%}
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    {%- for synapse_name, synapse_info in syns_info.items() %}
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.init_pointers(global_self_spikes);
+    {% endfor -%}
+    {% endfor -%}
+  };
+
 {%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
   void calibrate(double time_resolution) {
 {%- else %}

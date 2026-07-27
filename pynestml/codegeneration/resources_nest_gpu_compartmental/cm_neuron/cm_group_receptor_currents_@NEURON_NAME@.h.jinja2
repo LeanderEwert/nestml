@@ -145,12 +145,10 @@ private:
   // spike buffer
   std::vector< float* > {{receptor_info["buffer_name"]}}_;
 
-    std::vector< bool > self_spikes;
-
-
 //device variables
   double* GPU_{{receptor_name}}_vars;
   double* GPU_{{receptor_name}}_param;
+  int* GPU_self_spikes = nullptr;
 
 //non specific variables
   double* GPU_v_comp;
@@ -193,6 +191,7 @@ public:
 
   void new_receptor(std::size_t comp_ass, const long rec_index);
   void new_receptor(std::size_t comp_ass, const long rec_index, const nlohmann::json& receptor_params);
+  void init_pointers(int* global_self_spikes) { GPU_self_spikes = global_self_spikes; }
 
   //number of receptors
   std::size_t neuron_{{ receptor_name }}_receptor_count = 0;
