@@ -273,6 +273,7 @@ struct {{ion_channel_name}}{{cm_unique_suffix}}Device
   double* y;
   double* param;
   int* global_self_spikes;
+  double* global_time_resolution;
   std::size_t neuron_{{ion_channel_name}}_channel_count;
 
 {%- for function in channel_info["Functions"] %}
@@ -292,7 +293,7 @@ struct {{ion_channel_name}}{{cm_unique_suffix}}Device
   {
       const double self_spikes = static_cast<double>(global_self_spikes[0]);
       {%- if "time_resolution_var" in channel_info %}
-      double {{ printer_no_origin.print(channel_info["time_resolution_var"]) }} = 0.0;
+      double {{ printer_no_origin.print(channel_info["time_resolution_var"]) }} = global_time_resolution[0];
       {%- endif %}
       {%- for ode_variable, ode_info in channel_info["ODEs"].items() %}
           {%- for propagator, propagator_info in ode_info["transformed_solutions"][0]["propagators"].items() %}
@@ -340,7 +341,7 @@ std::pair< std::vector< double >, std::vector< double > > {{ion_channel_name}}{{
 
   const int threads_per_block = 256;
   const int blocks = (neuron_{{ion_channel_name}}_channel_count + threads_per_block - 1) / threads_per_block;
-  {{ion_channel_name}}{{cm_unique_suffix}}Device device{GPU_{{ion_channel_name}}_vars, GPU_{{ion_channel_name}}_param, GPU_self_spikes, neuron_{{ion_channel_name}}_channel_count};
+  {{ion_channel_name}}{{cm_unique_suffix}}Device device{GPU_{{ion_channel_name}}_vars, GPU_{{ion_channel_name}}_param, GPU_self_spikes, GPU_time_resolution, neuron_{{ion_channel_name}}_channel_count};
   {{ion_channel_name}}_device_update<<<blocks, threads_per_block>>>(device);
   cudaDeviceSynchronize();
 

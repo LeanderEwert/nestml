@@ -117,6 +117,7 @@ private:
   double* GPU_{{ion_channel_name}}_vars;
   double* GPU_{{ion_channel_name}}_param;
   int* GPU_self_spikes = nullptr;
+  double* GPU_time_resolution = nullptr;
 
   double* GPU_v_comp;
   double* GPU_i_tot_{{ion_channel_name}};
@@ -163,7 +164,11 @@ public:
 
   void new_channel(std::size_t comp_ass);
   void new_channel(std::size_t comp_ass, const nlohmann::json& channel_params);
-  void init_pointers(int* global_self_spikes) { GPU_self_spikes = global_self_spikes; }
+  void init_pointers(int* global_self_spikes, double* global_time_resolution)
+  {
+    GPU_self_spikes = global_self_spikes;
+    GPU_time_resolution = global_time_resolution;
+  }
 
   std::size_t neuron_{{ ion_channel_name }}_channel_count = 0;
   std::vector< size_t > compartment_association = {};

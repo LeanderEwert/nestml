@@ -18,7 +18,9 @@ Current manager for NEST GPU compartmental models.
 #include <algorithm>
 
 #include "{{neuronSpecificFileNamesCmSyns["channelcurrents"]}}.h"
+#include "{{neuronSpecificFileNamesCmSyns["concentrationcurrents"]}}.h"
 #include "{{neuronSpecificFileNamesCmSyns["receptorcurrents"]}}.h"
+#include "{{neuronSpecificFileNamesCmSyns["continuouscurrents"]}}.h"
 
 ///////////////////////////////////////////// currents
 
@@ -101,18 +103,24 @@ public:
   GroupCurrents{{cm_unique_suffix}}(){};
   ~GroupCurrents{{cm_unique_suffix}}(){};
 
-  void init_pointers(int* global_self_spikes)
+  void init_pointers(int* global_self_spikes, double* global_time_resolution)
   {
     {%- for ion_channel_name, channel_info in chan_info.items() %}
-    {{ion_channel_name}}{{channel_suffix}}.init_pointers(global_self_spikes);
+    {{ion_channel_name}}{{channel_suffix}}.init_pointers(global_self_spikes, global_time_resolution);
+    {% endfor -%}
+    {%- for concentration_name, concentration_info in conc_info.items() %}
+    {{concentration_name}}{{concentration_suffix}}.init_pointers(global_self_spikes, global_time_resolution);
     {% endfor -%}
     {%- for receptor_name, receptor_info in recs_info.items() %}
-    {{receptor_name}}{{receptor_suffix}}.init_pointers(global_self_spikes);
+    {{receptor_name}}{{receptor_suffix}}.init_pointers(global_self_spikes, global_time_resolution);
     {% endfor -%}
     {%- for receptor_name, receptor_info in recs_info.items() %}
     {%- for synapse_name, synapse_info in syns_info.items() %}
-    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.init_pointers(global_self_spikes);
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.init_pointers(global_self_spikes, global_time_resolution);
     {% endfor -%}
+    {% endfor -%}
+    {%- for continuous_name, continuous_info in con_in_info.items() %}
+    {{continuous_name}}{{continuous_suffix}}.init_pointers(global_self_spikes, global_time_resolution);
     {% endfor -%}
   };
 
@@ -435,6 +443,20 @@ public:
     {% endfor -%}
   };
 
+  void debug_print_concentrations(const std::size_t neuron_index, const long lag) const
+  {
+    {%- for concentration_name, concentration_info in conc_info.items() %}
+    {{concentration_name}}{{concentration_suffix}}.debug_print_concentration("{{concentration_name}}", neuron_index, lag);
+    {% endfor -%}
+  };
+
+  void debug_print_continuous_input_currents(const std::size_t neuron_index, const long lag) const
+  {
+    {%- for continuous_name, continuous_info in con_in_info.items() %}
+    {{continuous_name}}{{continuous_suffix}}.debug_print_i_tot("{{continuous_name}}", neuron_index, lag);
+    {% endfor -%}
+  };
+
   std::vector< std::pair< double, double > > f_numstep( std::vector< double > v_comp_vec, const long lag )
   {
     std::vector< std::pair< double, double > > comp_to_gi(compartment_number, std::make_pair(0., 0.));
@@ -613,18 +635,18 @@ public:
     {%- for receptor_name, receptor_info in recs_info.items() %}
         {%- for synapse_name, synapse_info in syns_info.items() %}
     {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.postsynaptic_synaptic_processing();
-    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.f_self_spike(time_resolution);
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.f_self_spike();
         {% endfor -%}
-    {{receptor_name}}{{receptor_suffix}}.f_self_spike(time_resolution);
+    {{receptor_name}}{{receptor_suffix}}.f_self_spike();
     {% endfor -%}
     {%- for ion_channel_name, channel_info in chan_info.items() %}
     {{ion_channel_name}}{{channel_suffix}}.f_self_spike(time_resolution);
     {% endfor -%}
     {%- for concentration_name, concentration_info in conc_info.items() %}
-    {{concentration_name}}{{concentration_suffix}}.f_self_spike(time_resolution);
+    {{concentration_name}}{{concentration_suffix}}.f_self_spike();
     {% endfor -%}
     {%- for continuous_name, continuous_info in con_in_info.items() %}
-    {{continuous_name}}{{continuous_suffix}}.f_self_spike(time_resolution);
+    {{continuous_name}}{{continuous_suffix}}.f_self_spike();
     {% endfor -%}
   };
 };

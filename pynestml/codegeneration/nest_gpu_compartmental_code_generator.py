@@ -55,6 +55,10 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
                 "cm_group_receptor_currents_@NEURON_NAME@.h.jinja2",
                 "cm_group_channel_currents_@NEURON_NAME@.cu.jinja2",
                 "cm_group_channel_currents_@NEURON_NAME@.h.jinja2",
+                "cm_group_concentration_currents_@NEURON_NAME@.cu.jinja2",
+                "cm_group_concentration_currents_@NEURON_NAME@.h.jinja2",
+                "cm_group_continuous_input_currents_@NEURON_NAME@.cu.jinja2",
+                "cm_group_continuous_input_currents_@NEURON_NAME@.h.jinja2",
                 "cm_group_currents_@NEURON_NAME@.h.jinja2",
                 "cm_tree_@NEURON_NAME@.cpp.jinja2",
                 "cm_tree_@NEURON_NAME@.h.jinja2",
@@ -96,6 +100,12 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
     def get_cm_syns_channelcurrents_file_prefix(self, neuron: ASTModel):
         return "cm_group_channel_currents_" + neuron.get_name()
 
+    def get_cm_syns_concentrationcurrents_file_prefix(self, neuron: ASTModel):
+        return "cm_group_concentration_currents_" + neuron.get_name()
+
+    def get_cm_syns_continuouscurrents_file_prefix(self, neuron: ASTModel):
+        return "cm_group_continuous_input_currents_" + neuron.get_name()
+
     def _get_module_namespace(self, neurons: Sequence[ASTModel]) -> Dict:
         namespace = super()._get_module_namespace(neurons)
         namespace["is_gpu_compartmental"] = True
@@ -104,6 +114,8 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
                 "groupcurrents": self.get_cm_syns_neuroncurrents_file_prefix(neuron),
                 "receptorcurrents": self.get_cm_syns_receptorcurrents_file_prefix(neuron),
                 "channelcurrents": self.get_cm_syns_channelcurrents_file_prefix(neuron),
+                "concentrationcurrents": self.get_cm_syns_concentrationcurrents_file_prefix(neuron),
+                "continuouscurrents": self.get_cm_syns_continuouscurrents_file_prefix(neuron),
             })
         return namespace
 
@@ -114,6 +126,8 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
             "groupcurrents": self.get_cm_syns_neuroncurrents_file_prefix(neuron),
             "receptorcurrents": self.get_cm_syns_receptorcurrents_file_prefix(neuron),
             "channelcurrents": self.get_cm_syns_channelcurrents_file_prefix(neuron),
+            "concentrationcurrents": self.get_cm_syns_concentrationcurrents_file_prefix(neuron),
+            "continuouscurrents": self.get_cm_syns_continuouscurrents_file_prefix(neuron),
         })
         namespace["cuda_printer"] = _CompartmentalCUDAPrinter(neuron, self._printer_no_origin)
         return namespace
@@ -211,4 +225,15 @@ class _CompartmentalCUDAPrinter:
 
     def printer(self, index: str = "i", black_list=None):
         black_list = black_list or []
-        return self.printer_factory.create_ast_vector_parameter_setter_and_printer(index, black_list)
+        return _CompartmentalCUDABlockPrinter(self, index, black_list)
+
+
+class _CompartmentalCUDABlockPrinter:
+    def __init__(self, printer: _CompartmentalCUDAPrinter, index: str = "i", black_list=None):
+        self.printer = printer
+        self.index = index
+        self.black_list = black_list or []
+        self.std_vector_parameter = index
+
+    def print(self, node):
+        return self.printer.print(node, self.index, black_list=self.black_list)

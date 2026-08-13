@@ -1,0 +1,13 @@
+model cm_continuous_only:
+
+    state:
+        v_comp real = 0
+
+    equations:
+        inline I_ext real = I_stim @mechanism::continuous_input
+
+    input:
+        I_stim real <- continuous
+
+    output:
+        spike

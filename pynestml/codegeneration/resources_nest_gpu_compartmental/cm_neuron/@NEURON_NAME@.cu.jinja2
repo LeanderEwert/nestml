@@ -73,7 +73,7 @@ int {{neuronName}}::Init(int i_node_0, int n_node, int /*n_port*/, int i_group)
   neurons_.resize(n_node);
   for (auto& state : neurons_)
   {
-    ensure_self_spike_buffer(state);
+    ensure_device_shared_buffers(state);
   }
 
   float input_weight = 1.0;
@@ -98,8 +98,9 @@ int {{neuronName}}::Calibrate(double /*time_min*/, float time_resolution)
   time_resolution_ = time_resolution;
   for (auto& state : neurons_)
   {
-    ensure_self_spike_buffer(state);
-    state.c_tree.init_pointers(state.GPU_self_spikes);
+    state.time_resolution = time_resolution_;
+    ensure_device_shared_buffers(state);
+    state.c_tree.init_pointers(state.GPU_self_spikes, state.GPU_time_resolution);
     state.c_tree.set_syn_buffers(state.syn_buffers);
     state.c_tree.pre_run_hook(time_resolution_);
   }
@@ -132,7 +133,9 @@ int {{neuronName}}::Update(long long /*it*/, double t1)
                 << " v_comp=" << v_comp
                 << std::endl;
       state.c_tree.neuron_currents.debug_print_channel_currents(i, lag);
+      state.c_tree.neuron_currents.debug_print_concentrations(i, lag);
       state.c_tree.neuron_currents.debug_print_receptor_currents(i, lag);
+      state.c_tree.neuron_currents.debug_print_continuous_input_currents(i, lag);
 
       if (v_comp >= state.V_th && v_0_prev < state.V_th)
       {
@@ -157,18 +160,24 @@ int {{neuronName}}::SetNeuronVariablesDict(int i_neuron, int n_neuron, nlohmann:
   {
     neurons_.resize(n_neuron);
   }
-  ensure_self_spike_buffer(neurons_[i_neuron]);
+  ensure_device_shared_buffers(neurons_[i_neuron]);
   set_status(neurons_[i_neuron], dict);
   return 0;
 }
 
-void {{neuronName}}::ensure_self_spike_buffer(HostNeuronState& state)
+void {{neuronName}}::ensure_device_shared_buffers(HostNeuronState& state)
 {
   if (state.GPU_self_spikes == nullptr)
   {
     gpuErrchk(cudaMalloc(&state.GPU_self_spikes, sizeof(int)));
   }
+  if (state.GPU_time_resolution == nullptr)
+  {
+    gpuErrchk(cudaMalloc(&state.GPU_time_resolution, sizeof(double)));
+  }
+  state.time_resolution = time_resolution_;
   gpuErrchk(cudaMemcpy(state.GPU_self_spikes, &state.self_spikes, sizeof(int), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(state.GPU_time_resolution, &state.time_resolution, sizeof(double), cudaMemcpyHostToDevice));
 }
 
 void {{neuronName}}::set_status(HostNeuronState& state, const nlohmann::json& statusdict)
@@ -209,6 +218,22 @@ void {{neuronName}}::set_status(HostNeuronState& state, const nlohmann::json& st
       add_receptor_(state, receptors);
     }
   }
+
+  if (statusdict.contains("continuous_inputs"))
+  {
+    const nlohmann::json& continuous_inputs = statusdict["continuous_inputs"];
+    if (continuous_inputs.is_array())
+    {
+      for (const auto& continuous_input : continuous_inputs)
+      {
+        add_continuous_input_(state, continuous_input);
+      }
+    }
+    else
+    {
+      add_continuous_input_(state, continuous_inputs);
+    }
+  }
 }
 
 void {{neuronName}}::add_compartment_(HostNeuronState& state, const nlohmann::json& dd)
@@ -239,6 +264,24 @@ void {{neuronName}}::add_receptor_(HostNeuronState& state, const nlohmann::json&
   else
   {
     state.c_tree.neuron_currents.add_mechanism(receptor_type, compartment_idx, syn_idx);
+  }
+}
+
+void {{neuronName}}::add_continuous_input_(HostNeuronState& state, const nlohmann::json& dd)
+{
+  const long compartment_idx = dd["comp_idx"];
+  const std::string continuous_input_type = dd["continuous_input_type"];
+
+  const size_t continuous_idx = state.syn_buffers.size();
+  state.syn_buffers.push_back(0.0);
+
+  if (dd.contains("params"))
+  {
+    state.c_tree.neuron_currents.add_mechanism(continuous_input_type, compartment_idx, dd["params"], continuous_idx);
+  }
+  else
+  {
+    state.c_tree.neuron_currents.add_mechanism(continuous_input_type, compartment_idx, continuous_idx);
   }
 }
 

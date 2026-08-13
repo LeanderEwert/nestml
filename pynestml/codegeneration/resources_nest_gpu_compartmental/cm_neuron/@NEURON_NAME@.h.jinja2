@@ -104,6 +104,8 @@ class {{neuronName}} : public BaseNeuron
       , syn_buffers(0)
       , self_spikes(0)
       , GPU_self_spikes(nullptr)
+      , time_resolution(0.1)
+      , GPU_time_resolution(nullptr)
       , V_th(-55.0)
     {
     }
@@ -112,14 +114,17 @@ class {{neuronName}} : public BaseNeuron
     std::vector<float> syn_buffers;
     int self_spikes;
     int* GPU_self_spikes;
+    double time_resolution;
+    double* GPU_time_resolution;
     double V_th;
   };
 
-  void ensure_self_spike_buffer(HostNeuronState& state);
+  void ensure_device_shared_buffers(HostNeuronState& state);
   void read_spikes(HostNeuronState& state, int i_neuron, size_t n_port_var);
   void set_status(HostNeuronState& state, const nlohmann::json& statusdict);
   void add_compartment_(HostNeuronState& state, const nlohmann::json& dd);
   void add_receptor_(HostNeuronState& state, const nlohmann::json& dd);
+  void add_continuous_input_(HostNeuronState& state, const nlohmann::json& dd);
 
   std::vector<HostNeuronState> neurons_;
   float time_resolution_ = 0.1;

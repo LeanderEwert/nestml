@@ -149,6 +149,7 @@ private:
   double* GPU_{{receptor_name}}_vars;
   double* GPU_{{receptor_name}}_param;
   int* GPU_self_spikes = nullptr;
+  double* GPU_time_resolution = nullptr;
 
 //non specific variables
   double* GPU_v_comp;
@@ -191,7 +192,11 @@ public:
 
   void new_receptor(std::size_t comp_ass, const long rec_index);
   void new_receptor(std::size_t comp_ass, const long rec_index, const nlohmann::json& receptor_params);
-  void init_pointers(int* global_self_spikes) { GPU_self_spikes = global_self_spikes; }
+  void init_pointers(int* global_self_spikes, double* global_time_resolution)
+  {
+    GPU_self_spikes = global_self_spikes;
+    GPU_time_resolution = global_time_resolution;
+  }
 
   //number of receptors
   std::size_t neuron_{{ receptor_name }}_receptor_count = 0;
@@ -204,8 +209,8 @@ public:
                         {% endif %}{% for inline in receptor_info["Dependencies"]["channels"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if receptor_info["Dependencies"]["continuous"]|length %}
                         {% endif %}{% for inline in receptor_info["Dependencies"]["continuous"] %}, std::vector< double > {{inline.variable_name}}{% endfor %});
 
-    void f_update(double time_resolution);
-    void f_self_spike(double time_resolution);
+    void f_update();
+    void f_self_spike();
 
   // calibration
 {%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}

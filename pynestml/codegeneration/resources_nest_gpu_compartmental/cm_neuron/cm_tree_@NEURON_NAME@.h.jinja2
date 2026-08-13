@@ -205,7 +205,7 @@ public:
   void pre_run_hook( double time_resolution );
 {%- endif %}
 
-  void init_pointers(int* global_self_spikes);
+  void init_pointers(int* global_self_spikes, double* global_time_resolution);
   void set_syn_buffers( std::vector< float >& syn_buffers );
   // get a compartment pointer from the tree
   Compartment{{cm_unique_suffix}}* get_compartment( const long compartment_index ) const;

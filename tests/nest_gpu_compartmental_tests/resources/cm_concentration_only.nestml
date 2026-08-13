@@ -1,0 +1,15 @@
+model cm_concentration_only:
+
+    state:
+        v_comp real = 0
+        c_Ca real = 0.0001
+
+    parameters:
+        inf_Ca real = 0.0001
+        tau_Ca ms = 10.0 ms
+
+    equations:
+        c_Ca' = (inf_Ca - c_Ca) / tau_Ca @mechanism::concentration
+
+    output:
+        spike

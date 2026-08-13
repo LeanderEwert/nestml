@@ -372,6 +372,7 @@ struct {{receptor_name}}{{cm_unique_suffix}}Device
   double* y;
   double* param;
   int* global_self_spikes;
+  double* global_time_resolution;
   std::size_t neuron_{{receptor_name}}_receptor_count;
 
 {%- for function in receptor_info["Functions"] %}
@@ -424,6 +425,38 @@ struct {{receptor_name}}{{cm_unique_suffix}}Device
       y[i_g_val+i] = - y[i_d_i_tot_dv+i];
       y[i_i_val+i] = y[i_i_tot_{{receptor_name}}+i] - y[i_d_i_tot_dv+i] * y[i_v_comp+i];
   }
+
+  __device__ __forceinline__
+  void update_block(std::size_t i) const
+  {
+      const double self_spikes = static_cast<double>(global_self_spikes[0]);
+      double __resolution = global_time_resolution[0];
+    {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["UpdateBlock"] and receptor_info["Blocks"]["UpdateBlock"].get_stmts_body().get_stmts()|length %}
+      {%- set function = receptor_info["Blocks"]["UpdateBlock"] %}
+      {%- filter indent(4, True) %}
+      {%- with ast = function.get_stmts_body() %}
+      {%- set printer = cuda_printer.printer("i", black_list=["self_spikes"]) %}
+      {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
+      {%- endwith %}
+      {%- endfilter %}
+    {%- endif %}
+  }
+
+  __device__ __forceinline__
+  void self_spike_block(std::size_t i) const
+  {
+      const double self_spikes = static_cast<double>(global_self_spikes[0]);
+      double __resolution = global_time_resolution[0];
+    {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["SelfSpikesFunction"] and receptor_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
+      {%- set function = receptor_info["Blocks"]["SelfSpikesFunction"] %}
+      {%- filter indent(4, True) %}
+      {%- with ast = function.get_stmts_body() %}
+      {%- set printer = cuda_printer.printer("i", black_list=["self_spikes"]) %}
+      {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
+      {%- endwith %}
+      {%- endfilter %}
+    {%- endif %}
+  }
 };
 
 __global__
@@ -436,13 +469,31 @@ void {{receptor_name}}_device_update({{receptor_name}}{{cm_unique_suffix}}Device
   }
 }
 
+__global__
+void {{receptor_name}}_device_update_block({{receptor_name}}{{cm_unique_suffix}}Device device)
+{
+  std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < device.neuron_{{receptor_name}}_receptor_count)
+  {
+      device.update_block(i);
+  }
+}
+
+__global__
+void {{receptor_name}}_device_self_spike_block({{receptor_name}}{{cm_unique_suffix}}Device device)
+{
+  std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < device.neuron_{{receptor_name}}_receptor_count && device.global_self_spikes[0])
+  {
+      device.self_spike_block(i);
+  }
+}
+
 std::pair< std::vector< double >, std::vector< double > > {{receptor_name}}{{cm_unique_suffix}}::f_numstep(std::vector< double > v_comp, const long lag {% for ode in receptor_info["Dependencies"]["concentrations"] %}, std::vector< double > {{ode.lhs.name}}{% endfor %}{% if receptor_info["Dependencies"]["receptors"]|length %}
                         {% endif %}{% for inline in receptor_info["Dependencies"]["receptors"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if receptor_info["Dependencies"]["channels"]|length %}
                         {% endif %}{% for inline in receptor_info["Dependencies"]["channels"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if receptor_info["Dependencies"]["continuous"]|length %}
                         {% endif %}{% for inline in receptor_info["Dependencies"]["continuous"] %}, std::vector< double > {{inline.variable_name}}{% endfor %})
 {
-
-    {% if receptor_info["ODEs"].items()|length %} std::vector< double > {{ printer_no_origin.print(receptor_info["analytic_helpers"]["__h"]["ASTVariable"]) }}(neuron_{{ receptor_name }}_receptor_count, time_resolution); {% endif %}
 
   for(std::size_t i = 0; i < neuron_{{ receptor_name }}_receptor_count; i++){
       // get spikes
@@ -454,7 +505,7 @@ std::pair< std::vector< double >, std::vector< double > > {{receptor_name}}{{cm_
 
   const int threads_per_block = 256;
   const int blocks = (neuron_{{receptor_name}}_receptor_count + threads_per_block - 1) / threads_per_block;
-  {{receptor_name}}{{cm_unique_suffix}}Device device{GPU_{{receptor_name}}_vars, GPU_{{receptor_name}}_param, GPU_self_spikes, neuron_{{receptor_name}}_receptor_count};
+  {{receptor_name}}{{cm_unique_suffix}}Device device{GPU_{{receptor_name}}_vars, GPU_{{receptor_name}}_param, GPU_self_spikes, GPU_time_resolution, neuron_{{receptor_name}}_receptor_count};
   {{receptor_name}}_device_update<<<blocks, threads_per_block>>>(device);
   cudaDeviceSynchronize();
 
@@ -462,44 +513,44 @@ std::pair< std::vector< double >, std::vector< double > > {{receptor_name}}{{cm_
   cudaMemcpy(g_val.data(), GPU_g_val, neuron_{{receptor_name}}_receptor_count * sizeof(double), cudaMemcpyDeviceToHost);
   cudaMemcpy(i_val.data(), GPU_i_val, neuron_{{receptor_name}}_receptor_count * sizeof(double), cudaMemcpyDeviceToHost);
 
+  f_update();
+
   return std::make_pair(g_val, i_val);
 
 }
 
-void {{receptor_name}}{{cm_unique_suffix}}::f_update(double time_resolution)
+void {{receptor_name}}{{cm_unique_suffix}}::f_update()
 {
-    double __resolution = time_resolution;
-    for(std::size_t i = 0; i < neuron_{{ receptor_name }}_receptor_count; i++){
-    {%- if receptor_info["Blocks"] %}
-        {%- if receptor_info["Blocks"]["UpdateBlock"] %}
-        {%- set function = receptor_info["Blocks"]["UpdateBlock"] %}
-        {%-   filter indent(2,True) %}
-        {%-   with ast = function.get_stmts_body() %}
-        {%- set printer = vector_printer %}
-        {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
-        {%-   endwith %}
-        {%-   endfilter %}
-        {%- endif %}
-    {%- endif %}
-    }
+  {%- if not (receptor_info["Blocks"] and receptor_info["Blocks"]["UpdateBlock"] and receptor_info["Blocks"]["UpdateBlock"].get_stmts_body().get_stmts()|length) %}
+  return;
+  {%- else %}
+  if (neuron_{{ receptor_name }}_receptor_count == 0)
+  {
+    return;
+  }
+  const int threads_per_block = 256;
+  const int blocks = (neuron_{{receptor_name}}_receptor_count + threads_per_block - 1) / threads_per_block;
+  {{receptor_name}}{{cm_unique_suffix}}Device device{GPU_{{receptor_name}}_vars, GPU_{{receptor_name}}_param, GPU_self_spikes, GPU_time_resolution, neuron_{{receptor_name}}_receptor_count};
+  {{receptor_name}}_device_update_block<<<blocks, threads_per_block>>>(device);
+  cudaDeviceSynchronize();
+  {%- endif %}
 }
 
-void {{receptor_name}}{{cm_unique_suffix}}::f_self_spike(double time_resolution)
+void {{receptor_name}}{{cm_unique_suffix}}::f_self_spike()
 {
-    double __resolution = time_resolution;
-    for(std::size_t i = 0; i < neuron_{{ receptor_name }}_receptor_count; i++){
-    {%- if receptor_info["Blocks"] %}
-        {%- if receptor_info["Blocks"]["SelfSpikesFunction"] %}
-        {%- set function = receptor_info["Blocks"]["SelfSpikesFunction"] %}
-        {%-   filter indent(2,True) %}
-        {%-   with ast = function.get_stmts_body() %}
-        {%- set printer = vector_printer %}
-        {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
-        {%-   endwith %}
-        {%-   endfilter %}
-        {%- endif %}
-    {%- endif %}
-    }
+  {%- if not (receptor_info["Blocks"] and receptor_info["Blocks"]["SelfSpikesFunction"] and receptor_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length) %}
+  return;
+  {%- else %}
+  if (neuron_{{ receptor_name }}_receptor_count == 0)
+  {
+    return;
+  }
+  const int threads_per_block = 256;
+  const int blocks = (neuron_{{receptor_name}}_receptor_count + threads_per_block - 1) / threads_per_block;
+  {{receptor_name}}{{cm_unique_suffix}}Device device{GPU_{{receptor_name}}_vars, GPU_{{receptor_name}}_param, GPU_self_spikes, GPU_time_resolution, neuron_{{receptor_name}}_receptor_count};
+  {{receptor_name}}_device_self_spike_block<<<blocks, threads_per_block>>>(device);
+  cudaDeviceSynchronize();
+  {%- endif %}
 }
 
 {%- for function in receptor_info["Functions"] %}
