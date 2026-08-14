@@ -60,7 +60,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
                 "cm_group_continuous_input_currents_@NEURON_NAME@.cu.jinja2",
                 "cm_group_continuous_input_currents_@NEURON_NAME@.h.jinja2",
                 "cm_group_currents_@NEURON_NAME@.h.jinja2",
-                "cm_tree_@NEURON_NAME@.cpp.jinja2",
+                "cm_tree_@NEURON_NAME@.cu.jinja2",
                 "cm_tree_@NEURON_NAME@.h.jinja2",
             ]
         },
@@ -69,6 +69,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
     _default_options["nest_gpu_path"] = None
     _default_options["register_neuron_model"] = True
     _default_options["skip_build"] = False
+    _default_options["gpu_compartment_recordables_count"] = 2
 
     def __init__(self, options: Optional[Mapping[str, Any]] = None):
         super().__init__(None)
@@ -130,6 +131,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
             "continuouscurrents": self.get_cm_syns_continuouscurrents_file_prefix(neuron),
         })
         namespace["cuda_printer"] = _CompartmentalCUDAPrinter(neuron, self._printer_no_origin)
+        namespace["gpu_compartment_recordables_count"] = int(self.get_option("gpu_compartment_recordables_count"))
         return namespace
 
     def generate_module_code(self, neurons: Sequence[ASTModel], metadata: Dict[str, Dict[str, Any]]) -> None:
@@ -208,32 +210,45 @@ class _CompartmentalCUDAPrinter:
             if symbol.get_symbol_name() != "__h" and not symbol.get_symbol_name().startswith("__P__")
         }
 
-    def print(self, expression, index: str = "i", array_name: str = "y", black_list=None):
+    def print(self, expression, index: str = "i", array_name: str = "y", black_list=None, stride: Optional[str] = None,
+              param_index: Optional[str] = None, param_stride: Optional[str] = None):
         black_list = black_list or []
+        suffix = "*" + stride + "+" + index + "]" if stride else "+" + index + "]"
         index_printer = self.printer_factory.create_ast_pre_and_suffix_setter_and_printer(
             prefix=array_name + "[i_",
-            suffix="+" + index + "]",
+            suffix=suffix,
             black_list=black_list,
         )
         code = index_printer.print(expression)
         if array_name != "param":
+            param_index = param_index or index
+            param_stride = param_stride if param_stride is not None else stride
+            param_suffix = "*" + param_stride + "+" + param_index + "]" if param_stride else "+" + param_index + "]"
             for parameter_name in self.parameter_names:
                 code = code.replace(
-                    array_name + "[i_" + parameter_name + "+" + index + "]",
-                    "param[i_" + parameter_name + "+" + index + "]")
+                    array_name + "[i_" + parameter_name + suffix,
+                    "param[i_" + parameter_name + param_suffix)
+        for variable_name in black_list:
+            code = code.replace(array_name + "[i_" + variable_name + suffix, variable_name)
         return code
 
-    def printer(self, index: str = "i", black_list=None):
+    def printer(self, index: str = "i", black_list=None, stride: Optional[str] = None,
+                param_index: Optional[str] = None, param_stride: Optional[str] = None):
         black_list = black_list or []
-        return _CompartmentalCUDABlockPrinter(self, index, black_list)
+        return _CompartmentalCUDABlockPrinter(self, index, black_list, stride, param_index, param_stride)
 
 
 class _CompartmentalCUDABlockPrinter:
-    def __init__(self, printer: _CompartmentalCUDAPrinter, index: str = "i", black_list=None):
+    def __init__(self, printer: _CompartmentalCUDAPrinter, index: str = "i", black_list=None,
+                 stride: Optional[str] = None, param_index: Optional[str] = None, param_stride: Optional[str] = None):
         self.printer = printer
         self.index = index
         self.black_list = black_list or []
+        self.stride = stride
+        self.param_index = param_index
+        self.param_stride = param_stride
         self.std_vector_parameter = index
 
     def print(self, node):
-        return self.printer.print(node, self.index, black_list=self.black_list)
+        return self.printer.print(node, self.index, black_list=self.black_list, stride=self.stride,
+                                  param_index=self.param_index, param_stride=self.param_stride)

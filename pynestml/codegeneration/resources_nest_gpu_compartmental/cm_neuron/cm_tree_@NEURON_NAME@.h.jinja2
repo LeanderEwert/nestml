@@ -61,6 +61,9 @@ along with NEST.  If not, see <http://www.gnu.org/licenses/>.
 
 #include <functional>
 #include <string>
+#include <vector>
+
+#include "cuda_error.h"
 
 class Compartment{{cm_unique_suffix}}
 {
@@ -188,6 +191,23 @@ private:
   std::vector< double > gg_vec;
   std::vector< double > ff_vec;
 
+  float* GPU_v_comp = nullptr;
+  float* GPU_ca__div__dt = nullptr;
+  float* GPU_gl__times__el = nullptr;
+  float* GPU_gg0 = nullptr;
+  float* GPU_gg = nullptr;
+  float* GPU_ff = nullptr;
+  float* GPU_hh = nullptr;
+  float* GPU_gc = nullptr;
+  float* GPU_mech_g = nullptr;
+  float* GPU_mech_i = nullptr;
+  int* GPU_parent_index = nullptr;
+  int n_var_ = 0;
+  int i_neuron_ = 0;
+  int max_recordables_ = 0;
+  bool base_arrays_initialized_ = false;
+  bool device_tree_initialized_ = false;
+
 public:
   // constructor, destructor
   CompTree{{cm_unique_suffix}}();
@@ -206,7 +226,10 @@ public:
 {%- endif %}
 
   void init_pointers(int* global_self_spikes, double* global_time_resolution);
+  void init_base_arrays(float* var_arr, int n_var, int i_neuron, int base_index, int max_recordables);
   void set_syn_buffers( std::vector< float >& syn_buffers );
+  void sync_device_tree_from_host();
+  void sync_host_voltage_from_device();
   // get a compartment pointer from the tree
   Compartment{{cm_unique_suffix}}* get_compartment( const long compartment_index ) const;
   Compartment{{cm_unique_suffix}}* get_compartment( const long compartment_index, Compartment{{cm_unique_suffix}}* compartment, const long raise_flag ) const;
@@ -229,7 +252,7 @@ public:
   double get_compartment_voltage( const long compartment_index );
 
   // construct the numerical integration matrix and vector
-  void construct_matrix( const long lag );
+  void construct_matrix( const long lag, float* port_input_arr, int port_input_port_step );
   // solve the matrix equation for next timestep voltage
   void solve_matrix();
 

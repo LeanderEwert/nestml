@@ -24,6 +24,7 @@
 #include <cmath>
 #include <config.h>
 #include <iostream>
+#include <stdexcept>
 
 #include "{{neuronName}}.h"
 #include "spike_buffer.h"
@@ -35,31 +36,17 @@ int {{neuronName}}::Init(int i_node_0, int n_node, int /*n_port*/, int i_group)
   BaseNeuron::Init(i_node_0, n_node, N_PORT_VAR, i_group);
   node_type_ = i_{{neuronName}}_model;
 
-  n_scal_var_ = N_SCAL_VAR;
+  n_scal_var_ = 0;
   n_port_var_ = N_PORT_VAR;
-  n_var_ = n_scal_var_ + n_port_var_;
+  n_var_ = 0;
 
-  n_scal_param_ = N_SCAL_PARAM;
-  n_param_ = n_scal_param_;
+  n_scal_param_ = 0;
+  n_param_ = 0;
   n_group_param_ = N_GROUP_PARAM;
   group_param_ = new float[N_GROUP_PARAM];
 
-  if (n_param_ > 0)
-  {
-    AllocParamArr();
-  }
-  else
-  {
-    param_arr_ = nullptr;
-  }
-  if (n_var_ > 0)
-  {
-    AllocVarArr();
-  }
-  else
-  {
-    var_arr_ = nullptr;
-  }
+  param_arr_ = nullptr;
+  var_arr_ = nullptr;
 
   scal_var_name_ = {{neuronName}}_scal_var_name;
   scal_param_name_ = {{neuronName}}_scal_param_name;
@@ -83,8 +70,8 @@ int {{neuronName}}::Init(int i_node_0, int n_node, int /*n_port*/, int i_group)
   port_weight_port_step_ = 0;
 
 {%- if neuron.get_spike_input_ports() | length > 0 %}
-  port_input_arr_ = GetVarArr() + n_scal_var_ + GetPortVarIdx("{{neuron.get_spike_input_ports()[0].get_symbol_name()}}");
-  port_input_arr_step_ = n_var_;
+  port_input_arr_ = nullptr;
+  port_input_arr_step_ = 0;
   port_input_port_step_ = 1;
 {%- endif %}
 
@@ -96,11 +83,25 @@ int {{neuronName}}::Calibrate(double /*time_min*/, float time_resolution)
   h_min_ = group_param_[i_h_min_rel] * time_resolution;
   h_ = group_param_[i_h0_rel] * time_resolution;
   time_resolution_ = time_resolution;
-  for (auto& state : neurons_)
+  for (size_t i = 0; i < neurons_.size(); ++i)
   {
+    HostNeuronState& state = neurons_[i];
     state.time_resolution = time_resolution_;
     ensure_device_shared_buffers(state);
     state.c_tree.init_pointers(state.GPU_self_spikes, state.GPU_time_resolution);
+    state.c_tree.init_base_arrays(GetVarArr(),
+                                  n_var_,
+                                  static_cast<int>(i),
+                                  0,
+                                  runtime_compartment_count_);
+    state.c_tree.neuron_currents.init_base_arrays(GetVarArr(),
+                                                  GetParamArr(),
+                                                  n_var_,
+                                                  n_param_,
+                                                  static_cast<int>(i),
+                                                  runtime_compartment_count_,
+                                                  0,
+                                                  runtime_compartment_count_);
     state.c_tree.set_syn_buffers(state.syn_buffers);
     state.c_tree.pre_run_hook(time_resolution_);
   }
@@ -113,9 +114,6 @@ int {{neuronName}}::Update(long long /*it*/, double t1)
   for (size_t i = 0; i < neurons_.size(); ++i)
   {
     HostNeuronState& state = neurons_[i];
-{%- if neuron.get_spike_input_ports() | length > 0 %}
-    read_spikes(state, i, N_PORT_VAR);
-{%- endif %}
 
     for (long lag = to_step - 1; lag < to_step; ++lag)
     {
@@ -124,8 +122,13 @@ int {{neuronName}}::Update(long long /*it*/, double t1)
 
       const double v_0_prev = *(state.c_tree.get_root()->v_comp);
 
-      state.c_tree.construct_matrix(lag);
+{%- if neuron.get_spike_input_ports() | length > 0 %}
+      state.c_tree.construct_matrix(lag, port_input_arr_ + i * port_input_arr_step_, port_input_port_step_);
+{%- else %}
+      state.c_tree.construct_matrix(lag, nullptr, 1);
+{%- endif %}
       state.c_tree.solve_matrix();
+      sync_compartment_recordables(state, i);
 
       const double v_comp = *(state.c_tree.get_root()->v_comp);
       std::cout << "[{{neuronName}} debug] neuron=" << i
@@ -162,6 +165,8 @@ int {{neuronName}}::SetNeuronVariablesDict(int i_neuron, int n_neuron, nlohmann:
   }
   ensure_device_shared_buffers(neurons_[i_neuron]);
   set_status(neurons_[i_neuron], dict);
+  configure_runtime_layout_from_state(neurons_[i_neuron]);
+  sync_compartment_recordables(neurons_[i_neuron], i_neuron);
   return 0;
 }
 
@@ -178,6 +183,104 @@ void {{neuronName}}::ensure_device_shared_buffers(HostNeuronState& state)
   state.time_resolution = time_resolution_;
   gpuErrchk(cudaMemcpy(state.GPU_self_spikes, &state.self_spikes, sizeof(int), cudaMemcpyHostToDevice));
   gpuErrchk(cudaMemcpy(state.GPU_time_resolution, &state.time_resolution, sizeof(double), cudaMemcpyHostToDevice));
+}
+
+void {{neuronName}}::configure_runtime_layout_from_state(HostNeuronState& state)
+{
+  const int compartment_count = static_cast<int>(state.c_tree.get_size());
+  std::vector<std::string> scal_var_names;
+  std::vector<std::string> scal_param_names;
+
+  for (int compartment_index = 0; compartment_index < compartment_count; ++compartment_index)
+  {
+    scal_var_names.push_back("v_comp" + std::to_string(compartment_index));
+  }
+
+  state.c_tree.neuron_currents.append_runtime_names(scal_var_names, scal_param_names);
+
+  if (runtime_layout_configured_)
+  {
+    if (runtime_compartment_count_ != compartment_count
+        || runtime_scal_var_names_.size() != scal_var_names.size()
+        || runtime_scal_param_names_.size() != scal_param_names.size()
+        || runtime_scal_var_names_ != scal_var_names
+        || runtime_scal_param_names_ != scal_param_names)
+    {
+      throw std::runtime_error("All neurons in a NEST-GPU compartmental group must have the same generated layout");
+    }
+    return;
+  }
+
+  runtime_compartment_count_ = compartment_count;
+  runtime_scal_var_names_ = scal_var_names;
+  runtime_scal_param_names_ = scal_param_names;
+  runtime_layout_configured_ = true;
+
+  n_scal_var_ = static_cast<int>(runtime_scal_var_names_.size());
+  n_port_var_ = N_PORT_VAR;
+  n_var_ = n_scal_var_ + n_port_var_;
+  n_scal_param_ = static_cast<int>(runtime_scal_param_names_.size());
+  n_param_ = n_scal_param_;
+  scal_var_name_ = runtime_scal_var_names_.empty() ? nullptr : runtime_scal_var_names_.data();
+  scal_param_name_ = runtime_scal_param_names_.empty() ? nullptr : runtime_scal_param_names_.data();
+
+  if (n_param_ > 0)
+  {
+    AllocParamArr();
+  }
+  else
+  {
+    param_arr_ = nullptr;
+  }
+  if (n_var_ > 0)
+  {
+    AllocVarArr();
+    gpuErrchk(cudaMemset(var_arr_, 0, n_node_ * n_var_ * sizeof(float)));
+  }
+  else
+  {
+    var_arr_ = nullptr;
+  }
+  runtime_arrays_allocated_ = true;
+
+{%- if neuron.get_spike_input_ports() | length > 0 %}
+  port_input_arr_ = GetVarArr() + n_scal_var_ + GetPortVarIdx("{{neuron.get_spike_input_ports()[0].get_symbol_name()}}");
+  port_input_arr_step_ = n_var_;
+  port_input_port_step_ = 1;
+{%- endif %}
+}
+
+void {{neuronName}}::sync_compartment_recordables(HostNeuronState& state, int i_neuron)
+{
+  if (var_arr_ == nullptr || !runtime_layout_configured_)
+  {
+    return;
+  }
+
+  for (long compartment_index = 0; compartment_index < runtime_compartment_count_; ++compartment_index)
+  {
+    float recordable_value = 0.0f;
+    if (compartment_index < static_cast<long>(state.c_tree.get_size()))
+    {
+      recordable_value = static_cast<float>(state.c_tree.get_compartment_voltage(compartment_index));
+    }
+    float* recordable_ptr = GetVarArr() + i_neuron * n_var_ + i_v_comp0 + compartment_index;
+    gpuErrchk(cudaMemcpy(recordable_ptr, &recordable_value, sizeof(float), cudaMemcpyHostToDevice));
+  }
+
+  state.c_tree.init_base_arrays(GetVarArr(),
+                                n_var_,
+                                i_neuron,
+                                0,
+                                runtime_compartment_count_);
+  state.c_tree.neuron_currents.init_base_arrays(GetVarArr(),
+                                                GetParamArr(),
+                                                n_var_,
+                                                n_param_,
+                                                i_neuron,
+                                                runtime_compartment_count_,
+                                                0,
+                                                runtime_compartment_count_);
 }
 
 void {{neuronName}}::set_status(HostNeuronState& state, const nlohmann::json& statusdict)
@@ -283,27 +386,4 @@ void {{neuronName}}::add_continuous_input_(HostNeuronState& state, const nlohman
   {
     state.c_tree.neuron_currents.add_mechanism(continuous_input_type, compartment_idx, continuous_idx);
   }
-}
-
-void {{neuronName}}::read_spikes(HostNeuronState& state, int i_neuron, size_t n_port_var)
-{
-  std::vector<float> host_values(n_port_var, 0.0);
-  float* spike_values = port_input_arr_ + i_neuron * port_input_arr_step_;
-  gpuErrchk(cudaMemcpy(host_values.data(), spike_values, n_port_var * sizeof(float), cudaMemcpyDeviceToHost));
-
-  for (size_t i = 0; i < n_port_var && i < state.syn_buffers.size(); ++i)
-  {
-    if (host_values[i] != 0.0)
-    {
-      std::cout << "[{{neuronName}} debug] neuron=" << i_neuron
-                << " receptor=" << i
-                << " spike_arrival=1"
-                << " value=" << host_values[i]
-                << std::endl;
-      state.syn_buffers[i] = host_values[i];
-      host_values[i] = 0.0;
-    }
-  }
-
-  gpuErrchk(cudaMemcpy(spike_values, host_values.data(), n_port_var * sizeof(float), cudaMemcpyHostToDevice));
 }

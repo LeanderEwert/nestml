@@ -17,6 +17,7 @@ Continuous-input mechanism classes for NEST GPU compartmental models.
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
+#include <cuda_runtime.h>
 
 {% macro render_variable_type(variable) -%}
 {%- with -%}
@@ -182,6 +183,13 @@ public:
     GPU_self_spikes = global_self_spikes;
     GPU_time_resolution = global_time_resolution;
   }
+  void init_recordable_pointers(float*, int, int, int, int)
+  {
+  }
+  void init_base_arrays(float* var_arr, float*, int n_var, int, int i_neuron, int base_index, int, int max_recordables)
+  {
+    init_recordable_pointers(var_arr, n_var, i_neuron, base_index, max_recordables);
+  }
 
   std::size_t neuron_{{ continuous_name }}_continuous_input_count = 0;
   std::vector< size_t > compartment_association = {};
@@ -219,6 +227,40 @@ public:
   {% endfor %}
 
   void get_currents_per_compartment(std::vector< double >& compartment_to_current);
+  void sync_recordables(float* var_arr, int n_var, int i_neuron, int base_index, int max_recordables) const
+  {
+    int recordable_offset = base_index;
+
+    {%- for variable_name, variable_info in continuous_info["States"].items() %}
+    for (std::size_t cont_id = 0; cont_id < neuron_{{ continuous_name }}_continuous_input_count; ++cont_id)
+    {
+      const std::size_t compartment_index = compartment_association[cont_id];
+      if (compartment_index < static_cast<std::size_t>(max_recordables))
+      {
+        const float recordable_value = {{variable_name}}.size() > cont_id ? static_cast<float>({{variable_name}}[cont_id]) : 0.0f;
+        cudaMemcpy(var_arr + i_neuron * n_var + recordable_offset + compartment_index,
+                   &recordable_value,
+                   sizeof(float),
+                   cudaMemcpyHostToDevice);
+      }
+    }
+    recordable_offset += max_recordables;
+    {% endfor -%}
+
+    for (std::size_t cont_id = 0; cont_id < neuron_{{ continuous_name }}_continuous_input_count; ++cont_id)
+    {
+      const std::size_t compartment_index = compartment_association[cont_id];
+      if (compartment_index < static_cast<std::size_t>(max_recordables))
+      {
+        const float recordable_value = i_tot_{{continuous_name}}.size() > cont_id ? static_cast<float>(i_tot_{{continuous_name}}[cont_id]) : 0.0f;
+        cudaMemcpy(var_arr + i_neuron * n_var + recordable_offset + compartment_index,
+                   &recordable_value,
+                   sizeof(float),
+                   cudaMemcpyHostToDevice);
+      }
+    }
+  }
+
   void debug_print_i_tot(const std::string& mechanism_name, const std::size_t neuron_index, const long lag) const
   {
     for (std::size_t cont_id = 0; cont_id < neuron_{{ continuous_name }}_continuous_input_count; ++cont_id)

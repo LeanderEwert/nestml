@@ -41,10 +41,97 @@ extern __constant__ float NESTGPUTimeResolution;
 namespace {{neuronName}}_ns
 {
 enum ScalVarIndexes {
+{%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i_v_comp{{compartment_recordable_index}},
+{%- endfor %}
+{%- for ion_channel_name, channel_info in chan_info.items() %}
+  {%- for variable_name, variable_info in channel_info["States"].items() %}
+    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i_{{variable_name}}{{compartment_recordable_index}},
+    {%- endfor %}
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i_i_tot_{{ion_channel_name}}{{compartment_recordable_index}},
+  {%- endfor %}
+{%- endfor %}
+{%- for concentration_name, concentration_info in conc_info.items() %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i_{{concentration_name}}{{compartment_recordable_index}},
+  {%- endfor %}
+  {%- for variable_name, variable_info in concentration_info["States"].items() %}
+    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i_{{variable_name}}{{compartment_recordable_index}},
+    {%- endfor %}
+  {%- endfor %}
+{%- endfor %}
+{%- for receptor_name, receptor_info in recs_info.items() %}
+  {%- for variable_name, variable_info in receptor_info["States"].items() %}
+    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i_{{variable_name}}{{compartment_recordable_index}},
+    {%- endfor %}
+  {%- endfor %}
+  {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
+    {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["propagators"].items() %}
+      {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i___{{receptor_name}}_{{state_variable_name}}{{compartment_recordable_index}},
+      {%- endfor %}
+    {%- endfor %}
+  {%- endfor %}
+  {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
+    {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items() %}
+      {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i___{{receptor_name}}_{{state_variable_name}}{{compartment_recordable_index}},
+      {%- endfor %}
+    {%- endfor %}
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i___{{receptor_name}}_v_comp{{compartment_recordable_index}},
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i___{{receptor_name}}_s_val{{compartment_recordable_index}},
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i_i_tot_{{receptor_name}}{{compartment_recordable_index}},
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i_g_{{receptor_name}}{{compartment_recordable_index}},
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i___{{receptor_name}}_i_val{{compartment_recordable_index}},
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i___{{receptor_name}}_i_tot_dv{{compartment_recordable_index}},
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i___{{receptor_name}}_d_i_tot_dv{{compartment_recordable_index}},
+  {%- endfor %}
+{%- endfor %}
+{%- for continuous_name, continuous_info in con_in_info.items() %}
+  {%- for variable_name, variable_info in continuous_info["States"].items() %}
+    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i_{{variable_name}}{{compartment_recordable_index}},
+    {%- endfor %}
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i_i_tot_{{continuous_name}}{{compartment_recordable_index}},
+  {%- endfor %}
+{%- endfor %}
   N_SCAL_VAR
 };
 
 enum ScalParamIndexes {
+{%- for receptor_name, receptor_info in recs_info.items() %}
+  {%- for param_name, param_declaration in receptor_info["Parameters"].items() %}
+    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i_{{receptor_name}}_{{param_name}}{{compartment_recordable_index}},
+    {%- endfor %}
+  {%- endfor %}
+  {%- for internal_name, internal_declaration in receptor_info["internals_used_declared"] %}
+    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  i_{{receptor_name}}_{{internal_name}}{{compartment_recordable_index}},
+    {%- endfor %}
+  {%- endfor %}
+{%- endfor %}
   N_SCAL_PARAM
 };
 
@@ -56,9 +143,96 @@ enum PortVarIndexes {
 };
 
 const std::string {{neuronName}}_scal_var_name[N_SCAL_VAR] = {
+{%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "v_comp{{compartment_recordable_index}}",
+{%- endfor %}
+{%- for ion_channel_name, channel_info in chan_info.items() %}
+  {%- for variable_name, variable_info in channel_info["States"].items() %}
+    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "{{variable_name}}{{compartment_recordable_index}}",
+    {%- endfor %}
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "i_tot_{{ion_channel_name}}{{compartment_recordable_index}}",
+  {%- endfor %}
+{%- endfor %}
+{%- for concentration_name, concentration_info in conc_info.items() %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "{{concentration_name}}{{compartment_recordable_index}}",
+  {%- endfor %}
+  {%- for variable_name, variable_info in concentration_info["States"].items() %}
+    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "{{variable_name}}{{compartment_recordable_index}}",
+    {%- endfor %}
+  {%- endfor %}
+{%- endfor %}
+{%- for receptor_name, receptor_info in recs_info.items() %}
+  {%- for variable_name, variable_info in receptor_info["States"].items() %}
+    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "{{variable_name}}{{compartment_recordable_index}}",
+    {%- endfor %}
+  {%- endfor %}
+  {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
+    {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["propagators"].items() %}
+      {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "__{{receptor_name}}_{{state_variable_name}}{{compartment_recordable_index}}",
+      {%- endfor %}
+    {%- endfor %}
+  {%- endfor %}
+  {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
+    {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items() %}
+      {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "__{{receptor_name}}_{{state_variable_name}}{{compartment_recordable_index}}",
+      {%- endfor %}
+    {%- endfor %}
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "__{{receptor_name}}_v_comp{{compartment_recordable_index}}",
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "__{{receptor_name}}_s_val{{compartment_recordable_index}}",
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "i_tot_{{receptor_name}}{{compartment_recordable_index}}",
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "g_{{receptor_name}}{{compartment_recordable_index}}",
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "__{{receptor_name}}_i_val{{compartment_recordable_index}}",
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "__{{receptor_name}}_i_tot_dv{{compartment_recordable_index}}",
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "__{{receptor_name}}_d_i_tot_dv{{compartment_recordable_index}}",
+  {%- endfor %}
+{%- endfor %}
+{%- for continuous_name, continuous_info in con_in_info.items() %}
+  {%- for variable_name, variable_info in continuous_info["States"].items() %}
+    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "{{variable_name}}{{compartment_recordable_index}}",
+    {%- endfor %}
+  {%- endfor %}
+  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "i_tot_{{continuous_name}}{{compartment_recordable_index}}",
+  {%- endfor %}
+{%- endfor %}
 };
 
 const std::string {{neuronName}}_scal_param_name[N_SCAL_PARAM] = {
+{%- for receptor_name, receptor_info in recs_info.items() %}
+  {%- for param_name, param_declaration in receptor_info["Parameters"].items() %}
+    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "{{receptor_name}}_{{param_name}}{{compartment_recordable_index}}",
+    {%- endfor %}
+  {%- endfor %}
+  {%- for internal_name, internal_declaration in receptor_info["internals_used_declared"] %}
+    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
+  "{{receptor_name}}_{{internal_name}}{{compartment_recordable_index}}",
+    {%- endfor %}
+  {%- endfor %}
+{%- endfor %}
 };
 
 const std::string {{neuronName}}_port_var_name[N_PORT_VAR] = {
@@ -120,13 +294,19 @@ class {{neuronName}} : public BaseNeuron
   };
 
   void ensure_device_shared_buffers(HostNeuronState& state);
-  void read_spikes(HostNeuronState& state, int i_neuron, size_t n_port_var);
+  void configure_runtime_layout_from_state(HostNeuronState& state);
+  void sync_compartment_recordables(HostNeuronState& state, int i_neuron);
   void set_status(HostNeuronState& state, const nlohmann::json& statusdict);
   void add_compartment_(HostNeuronState& state, const nlohmann::json& dd);
   void add_receptor_(HostNeuronState& state, const nlohmann::json& dd);
   void add_continuous_input_(HostNeuronState& state, const nlohmann::json& dd);
 
   std::vector<HostNeuronState> neurons_;
+  std::vector<std::string> runtime_scal_var_names_;
+  std::vector<std::string> runtime_scal_param_names_;
+  int runtime_compartment_count_ = 0;
+  bool runtime_layout_configured_ = false;
+  bool runtime_arrays_allocated_ = false;
   float time_resolution_ = 0.1;
 };
 

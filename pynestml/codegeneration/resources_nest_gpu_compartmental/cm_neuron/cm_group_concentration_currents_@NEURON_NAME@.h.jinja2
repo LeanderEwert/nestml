@@ -17,6 +17,7 @@ Concentration mechanism classes for NEST GPU compartmental models.
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
+#include <cuda_runtime.h>
 
 {% macro render_variable_type(variable) -%}
 {%- with -%}
@@ -53,7 +54,7 @@ enum {{ concentration_name }}VarIndexes
         {%- endfor %}
     {%- endfor %}
 
-  i_v_comp,
+  i_{{ concentration_name }}_v_comp,
   i_{{ concentration_name }},
   N_{{ concentration_name }}_VARS
 };
@@ -74,6 +75,8 @@ enum {{ concentration_name }}ParamIndexes
 
 class {{concentration_name}}{{cm_unique_suffix}}{
 private:
+  static constexpr int i_v_comp = i_{{ concentration_name }}_v_comp;
+
   std::vector< double > {{concentration_name}} = {};
   std::vector< double > v_comp_conc_ = {};
 
@@ -109,43 +112,45 @@ private:
   std::vector< double > {{variable.name}};
   {%- endfor %}
 
-  double* GPU_{{concentration_name}}_vars;
-  double* GPU_{{concentration_name}}_param;
+  float* GPU_{{concentration_name}}_vars = nullptr;
+  float* GPU_{{concentration_name}}_param = nullptr;
+  int* GPU_compartment_association = nullptr;
   int* GPU_self_spikes = nullptr;
   double* GPU_time_resolution = nullptr;
+  int recordable_max = 0;
 
-  double* GPU_v_comp;
-  double* GPU_{{concentration_name}};
+  float* GPU_v_comp;
+  float* GPU_{{concentration_name}};
 
     {%- for variable_name, variable_info in concentration_info["States"].items() %}
-  double* GPU_{{ variable_name }};
+  float* GPU_{{ variable_name }};
     {%- endfor %}
 
     {%- for ode_variable, ode_info in concentration_info["ODEs"].items() %}
       {%- for propagator, propagator_info in ode_info["transformed_solutions"][0]["propagators"].items() %}
-  double* GPU_{{ propagator }};
+  float* GPU_{{ propagator }};
       {%- endfor %}
     {%- endfor %}
 
     {%- for convolution, convolution_info in concentration_info["convolutions"].items() %}
         {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["propagators"].items()%}
-  double* GPU_{{state_variable_name}};
+  float* GPU_{{state_variable_name}};
         {%- endfor %}
     {%- endfor %}
 
     {%- for convolution, convolution_info in concentration_info["convolutions"].items() %}
         {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items()%}
-  double* GPU_{{state_variable_name}};
+  float* GPU_{{state_variable_name}};
         {%- endfor %}
     {%- endfor %}
 
     {%- for param_name, param_declaration in concentration_info["Parameters"].items() %}
-  double* GPU_{{param_name}};
+  float* GPU_{{param_name}};
     {%- endfor %}
 
     {%- for internal_name, internal_declaration in concentration_info["Internals"].items() %}
       {%- set variable = internal_declaration["ASTVariable"] %}
-  double* GPU_{{variable.name}};
+  float* GPU_{{variable.name}};
     {%- endfor %}
 
 public:
@@ -159,6 +164,15 @@ public:
     GPU_self_spikes = global_self_spikes;
     GPU_time_resolution = global_time_resolution;
   }
+  void init_recordable_pointers(float*, int, int, int, int)
+  {
+  }
+  void init_base_arrays(float* var_arr, float* param_arr, int n_var, int n_param, int i_neuron, int base_index, int param_base_index, int max_recordables)
+  {
+    GPU_{{concentration_name}}_vars = var_arr == nullptr ? nullptr : var_arr + i_neuron * n_var + base_index;
+    GPU_{{concentration_name}}_param = param_arr == nullptr ? nullptr : param_arr + i_neuron * n_param + param_base_index;
+    recordable_max = max_recordables;
+  }
 
   std::size_t neuron_{{ concentration_name }}_concentration_count = 0;
   std::vector< size_t > compartment_association = {};
@@ -167,6 +181,8 @@ public:
                         {% endif %}{% for inline in concentration_info["Dependencies"]["receptors"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if concentration_info["Dependencies"]["channels"]|length %}
                         {% endif %}{% for inline in concentration_info["Dependencies"]["channels"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if concentration_info["Dependencies"]["continuous"]|length %}
                         {% endif %}{% for inline in concentration_info["Dependencies"]["continuous"] %}, std::vector< double > {{inline.variable_name}}{% endfor %});
+  void f_numstep_device(float* shared_v_comp, long lag{% for ode in concentration_info["Dependencies"]["concentrations"] %}, float* dep_{{ode.lhs.name}}{% endfor %}{% for inline in concentration_info["Dependencies"]["receptors"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in concentration_info["Dependencies"]["channels"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in concentration_info["Dependencies"]["continuous"] %}, float* dep_{{inline.variable_name}}{% endfor %});
+  void add_concentrations_to_device(float* compartment_concentration, int compartment_count) const;
 
   void f_update();
   void f_self_spike();
@@ -184,16 +200,53 @@ public:
   {% endfor %}
 
   void get_concentrations_per_compartment(std::vector< double >& compartment_to_concentration);
+  void sync_recordables(float* var_arr, int n_var, int i_neuron, int base_index, int max_recordables) const
+  {
+    int recordable_offset = base_index;
+
+    for (std::size_t conc_id = 0; conc_id < neuron_{{ concentration_name }}_concentration_count; ++conc_id)
+    {
+      const std::size_t slot = conc_id;
+      if (slot < static_cast<std::size_t>(max_recordables))
+      {
+        const float recordable_value = {{concentration_name}}.size() > conc_id ? static_cast<float>({{concentration_name}}[conc_id]) : 0.0f;
+        cudaMemcpy(var_arr + i_neuron * n_var + recordable_offset + slot,
+                   &recordable_value,
+                   sizeof(float),
+                   cudaMemcpyHostToDevice);
+      }
+    }
+    recordable_offset += max_recordables;
+
+    {%- for variable_name, variable_info in concentration_info["States"].items() %}
+    for (std::size_t conc_id = 0; conc_id < neuron_{{ concentration_name }}_concentration_count; ++conc_id)
+    {
+      const std::size_t slot = conc_id;
+      if (slot < static_cast<std::size_t>(max_recordables))
+      {
+        const float recordable_value = {{variable_name}}.size() > conc_id ? static_cast<float>({{variable_name}}[conc_id]) : 0.0f;
+        cudaMemcpy(var_arr + i_neuron * n_var + recordable_offset + slot,
+                   &recordable_value,
+                   sizeof(float),
+                   cudaMemcpyHostToDevice);
+      }
+    }
+    recordable_offset += max_recordables;
+    {% endfor -%}
+  }
+
   void debug_print_concentration(const std::string& mechanism_name, const std::size_t neuron_index, const long lag) const
   {
     for (std::size_t conc_id = 0; conc_id < neuron_{{ concentration_name }}_concentration_count; ++conc_id)
     {
+      float concentration_value = 0.0f;
+      cudaMemcpy(&concentration_value, GPU_{{concentration_name}} + conc_id, sizeof(float), cudaMemcpyDeviceToHost);
       std::cout << "[{{neuronName}} debug] neuron=" << neuron_index
                 << " lag=" << lag
                 << " mechanism=" << mechanism_name
                 << " concentration_index=" << conc_id
                 << " compartment=" << compartment_association[conc_id]
-                << " value=" << {{concentration_name}}[conc_id]
+                << " value=" << concentration_value
                 << std::endl;
     }
   }

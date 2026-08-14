@@ -16,6 +16,7 @@ Current manager for NEST GPU compartmental models.
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
+#include <cuda_runtime.h>
 
 #include "{{neuronSpecificFileNamesCmSyns["channelcurrents"]}}.h"
 #include "{{neuronSpecificFileNamesCmSyns["concentrationcurrents"]}}.h"
@@ -68,18 +69,21 @@ private:
   {%- for ion_channel_name, channel_info in chan_info.items() %}
   std::vector < double > {{ion_channel_name}}{{channel_suffix}}_shared_current;
   std::vector < std::pair< std::size_t, int > > {{ion_channel_name}}{{channel_suffix}}_con_area;
+  float* GPU_{{ion_channel_name}}{{channel_suffix}}_shared_current = nullptr;
   {% endfor -%}
 
   // concentrations
   {%- for concentration_name, concentration_info in conc_info.items() %}
   std::vector < double > {{concentration_name}}{{concentration_suffix}}_shared_concentration;
   std::vector < std::pair< std::size_t, int > > {{concentration_name}}{{concentration_suffix}}_con_area;
+  float* GPU_{{concentration_name}}{{concentration_suffix}}_shared_concentration = nullptr;
   {% endfor -%}
 
   // receptors
   {%- for receptor_name, receptor_info in recs_info.items() %}
   std::vector < double > {{receptor_name}}{{receptor_suffix}}_shared_current;
   std::vector < std::pair< std::size_t, int > > {{receptor_name}}{{receptor_suffix}}_con_area;
+  float* GPU_{{receptor_name}}{{receptor_suffix}}_shared_current = nullptr;
   {% endfor -%}
 
   // receptors with synapses
@@ -87,6 +91,7 @@ private:
   {%- for synapse_name, synapse_info in syns_info.items() %}
   std::vector < double > {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current;
   std::vector < std::pair< std::size_t, int > > {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_con_area;
+  float* GPU_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current = nullptr;
   {% endfor -%}
   {% endfor -%}
 
@@ -94,6 +99,7 @@ private:
   {%- for continuous_name, continuous_info in con_in_info.items() %}
   std::vector < double > {{continuous_name}}{{continuous_suffix}}_shared_current;
   std::vector < std::pair< std::size_t, int > > {{continuous_name}}{{continuous_suffix}}_con_area;
+  float* GPU_{{continuous_name}}{{continuous_suffix}}_shared_current = nullptr;
   {% endfor -%}
 
   //compartment gi states
@@ -102,6 +108,77 @@ private:
 public:
   GroupCurrents{{cm_unique_suffix}}(){};
   ~GroupCurrents{{cm_unique_suffix}}(){};
+
+  void ensure_device_shared_buffers(int compartment_count)
+  {
+    if (compartment_count <= 0)
+    {
+      return;
+    }
+    {%- for ion_channel_name, channel_info in chan_info.items() %}
+    if (GPU_{{ion_channel_name}}{{channel_suffix}}_shared_current == nullptr)
+    {
+      cudaMalloc(&GPU_{{ion_channel_name}}{{channel_suffix}}_shared_current, compartment_count * sizeof(float));
+      cudaMemset(GPU_{{ion_channel_name}}{{channel_suffix}}_shared_current, 0, compartment_count * sizeof(float));
+    }
+    {% endfor -%}
+    {%- for concentration_name, concentration_info in conc_info.items() %}
+    if (GPU_{{concentration_name}}{{concentration_suffix}}_shared_concentration == nullptr)
+    {
+      cudaMalloc(&GPU_{{concentration_name}}{{concentration_suffix}}_shared_concentration, compartment_count * sizeof(float));
+      cudaMemset(GPU_{{concentration_name}}{{concentration_suffix}}_shared_concentration, 0, compartment_count * sizeof(float));
+    }
+    {% endfor -%}
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    if (GPU_{{receptor_name}}{{receptor_suffix}}_shared_current == nullptr)
+    {
+      cudaMalloc(&GPU_{{receptor_name}}{{receptor_suffix}}_shared_current, compartment_count * sizeof(float));
+      cudaMemset(GPU_{{receptor_name}}{{receptor_suffix}}_shared_current, 0, compartment_count * sizeof(float));
+    }
+    {% endfor -%}
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    {%- for synapse_name, synapse_info in syns_info.items() %}
+    if (GPU_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current == nullptr)
+    {
+      cudaMalloc(&GPU_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current, compartment_count * sizeof(float));
+      cudaMemset(GPU_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current, 0, compartment_count * sizeof(float));
+    }
+    {% endfor -%}
+    {% endfor -%}
+    {%- for continuous_name, continuous_info in con_in_info.items() %}
+    if (GPU_{{continuous_name}}{{continuous_suffix}}_shared_current == nullptr)
+    {
+      cudaMalloc(&GPU_{{continuous_name}}{{continuous_suffix}}_shared_current, compartment_count * sizeof(float));
+      cudaMemset(GPU_{{continuous_name}}{{continuous_suffix}}_shared_current, 0, compartment_count * sizeof(float));
+    }
+    {% endfor -%}
+  }
+
+  void refresh_device_dependency_buffers(int compartment_count)
+  {
+    ensure_device_shared_buffers(compartment_count);
+    {%- for ion_channel_name, channel_info in chan_info.items() %}
+    cudaMemset(GPU_{{ion_channel_name}}{{channel_suffix}}_shared_current, 0, compartment_count * sizeof(float));
+    {{ion_channel_name}}{{channel_suffix}}.add_total_current_to_device(GPU_{{ion_channel_name}}{{channel_suffix}}_shared_current, compartment_count);
+    {% endfor -%}
+    {%- for concentration_name, concentration_info in conc_info.items() %}
+    cudaMemset(GPU_{{concentration_name}}{{concentration_suffix}}_shared_concentration, 0, compartment_count * sizeof(float));
+    {{concentration_name}}{{concentration_suffix}}.add_concentrations_to_device(GPU_{{concentration_name}}{{concentration_suffix}}_shared_concentration, compartment_count);
+    {% endfor -%}
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    cudaMemset(GPU_{{receptor_name}}{{receptor_suffix}}_shared_current, 0, compartment_count * sizeof(float));
+    {{receptor_name}}{{receptor_suffix}}.add_total_current_to_device(GPU_{{receptor_name}}{{receptor_suffix}}_shared_current, compartment_count);
+      {%- for synapse_name, synapse_info in syns_info.items() %}
+    cudaMemset(GPU_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current, 0, compartment_count * sizeof(float));
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.add_total_current_to_device(GPU_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current, compartment_count);
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.add_total_current_to_device(GPU_{{receptor_name}}{{receptor_suffix}}_shared_current, compartment_count);
+      {% endfor -%}
+    {% endfor -%}
+    {%- for continuous_name, continuous_info in con_in_info.items() %}
+    cudaMemset(GPU_{{continuous_name}}{{continuous_suffix}}_shared_current, 0, compartment_count * sizeof(float));
+    {% endfor -%}
+    cudaDeviceSynchronize();
+  }
 
   void init_pointers(int* global_self_spikes, double* global_time_resolution)
   {
@@ -121,6 +198,268 @@ public:
     {% endfor -%}
     {%- for continuous_name, continuous_info in con_in_info.items() %}
     {{continuous_name}}{{continuous_suffix}}.init_pointers(global_self_spikes, global_time_resolution);
+    {% endfor -%}
+  };
+
+  void init_recordable_pointers(float* var_arr, int n_var, int i_neuron, int base_index, int max_recordables)
+  {
+    int recordable_offset = base_index;
+
+    {%- for ion_channel_name, channel_info in chan_info.items() %}
+    {{ion_channel_name}}{{channel_suffix}}.init_recordable_pointers(var_arr, n_var, i_neuron, recordable_offset, max_recordables);
+    recordable_offset += max_recordables * ({{channel_info["States"]|length}} + 1);
+    {% endfor -%}
+
+    {%- for concentration_name, concentration_info in conc_info.items() %}
+    {{concentration_name}}{{concentration_suffix}}.init_recordable_pointers(var_arr, n_var, i_neuron, recordable_offset, max_recordables);
+    recordable_offset += max_recordables * ({{concentration_info["States"]|length}} + 1);
+    {% endfor -%}
+
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    {{receptor_name}}{{receptor_suffix}}.init_recordable_pointers(var_arr, n_var, i_neuron, recordable_offset, max_recordables);
+    recordable_offset += max_recordables * ({{receptor_info["States"]|length}} + 2);
+    {% endfor -%}
+
+    {%- for continuous_name, continuous_info in con_in_info.items() %}
+    {{continuous_name}}{{continuous_suffix}}.init_recordable_pointers(var_arr, n_var, i_neuron, recordable_offset, max_recordables);
+    recordable_offset += max_recordables * ({{continuous_info["States"]|length}} + 1);
+    {% endfor -%}
+  };
+
+  void init_base_arrays(float* var_arr, float* param_arr, int n_var, int n_param, int i_neuron, int base_var_index, int base_param_index, int max_recordables)
+  {
+    int var_offset = base_var_index;
+    int param_offset = base_param_index;
+
+    {%- for ion_channel_name, channel_info in chan_info.items() %}
+    {{ion_channel_name}}{{channel_suffix}}.init_base_arrays(var_arr, param_arr, n_var, n_param, i_neuron, var_offset, param_offset, {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count);
+    var_offset += {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count * N_{{ion_channel_name}}_VARS;
+    param_offset += {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count * N_{{ion_channel_name}}_PARAM;
+    {% endfor -%}
+
+    {%- for concentration_name, concentration_info in conc_info.items() %}
+    {{concentration_name}}{{concentration_suffix}}.init_base_arrays(var_arr, param_arr, n_var, n_param, i_neuron, var_offset, param_offset, {{concentration_name}}{{concentration_suffix}}.neuron_{{concentration_name}}_concentration_count);
+    var_offset += {{concentration_name}}{{concentration_suffix}}.neuron_{{concentration_name}}_concentration_count * N_{{concentration_name}}_VARS;
+    param_offset += {{concentration_name}}{{concentration_suffix}}.neuron_{{concentration_name}}_concentration_count * N_{{concentration_name}}_PARAM;
+    {% endfor -%}
+
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    {{receptor_name}}{{receptor_suffix}}.init_base_arrays(var_arr, param_arr, n_var, n_param, i_neuron, var_offset, param_offset, {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count);
+    var_offset += {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count * ({{receptor_info["States"]|length}}
+      {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
+        + {{convolution_info["analytic_solution"]["propagators"]|length}}
+      {%- endfor %}
+      {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
+        + {{convolution_info["analytic_solution"]["kernel_states"]|length}}
+      {%- endfor %}
+      + 7);
+    param_offset += {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count * ({{receptor_info["Parameters"]|length}} + {{receptor_info["internals_used_declared"]|length}});
+    {% endfor -%}
+
+    {%- for continuous_name, continuous_info in con_in_info.items() %}
+    {{continuous_name}}{{continuous_suffix}}.init_base_arrays(var_arr, param_arr, n_var, n_param, i_neuron, var_offset, param_offset, {{continuous_name}}{{continuous_suffix}}.neuron_{{continuous_name}}_continuous_input_count);
+    var_offset += {{continuous_name}}{{continuous_suffix}}.neuron_{{continuous_name}}_continuous_input_count * ({{continuous_info["States"]|length}} + 1);
+    {% endfor -%}
+  };
+
+  void append_runtime_names(std::vector<std::string>& scal_var_names, std::vector<std::string>& scal_param_names) const
+  {
+    {%- for ion_channel_name, channel_info in chan_info.items() %}
+    {%- for variable_name, variable_info in channel_info["States"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count; ++mech_index)
+    {
+      scal_var_names.push_back("{{variable_name}}" + std::to_string(mech_index));
+    }
+    {% endfor -%}
+    {%- for ode_variable, ode_info in channel_info["ODEs"].items() %}
+      {%- for propagator, propagator_info in ode_info["transformed_solutions"][0]["propagators"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{ion_channel_name}}_{{propagator}}" + std::to_string(mech_index));
+    }
+      {% endfor -%}
+    {% endfor -%}
+    {%- for convolution, convolution_info in channel_info["convolutions"].items() %}
+      {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["propagators"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{ion_channel_name}}_{{state_variable_name}}" + std::to_string(mech_index));
+    }
+      {% endfor -%}
+    {% endfor -%}
+    {%- for convolution, convolution_info in channel_info["convolutions"].items() %}
+      {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{ion_channel_name}}_{{state_variable_name}}" + std::to_string(mech_index));
+    }
+      {% endfor -%}
+    {% endfor -%}
+    for (std::size_t mech_index = 0; mech_index < {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{ion_channel_name}}_v_comp" + std::to_string(mech_index));
+    }
+    for (std::size_t mech_index = 0; mech_index < {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count; ++mech_index)
+    {
+      scal_var_names.push_back("i_tot_{{ion_channel_name}}" + std::to_string(mech_index));
+    }
+    for (std::size_t mech_index = 0; mech_index < {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{ion_channel_name}}_g_val" + std::to_string(mech_index));
+    }
+    for (std::size_t mech_index = 0; mech_index < {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{ion_channel_name}}_i_val" + std::to_string(mech_index));
+    }
+    for (std::size_t mech_index = 0; mech_index < {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{ion_channel_name}}_d_i_tot_dv" + std::to_string(mech_index));
+    }
+    {%- for param_name, param_declaration in channel_info["Parameters"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count; ++mech_index)
+    {
+      scal_param_names.push_back("{{ion_channel_name}}_{{param_name}}" + std::to_string(mech_index));
+    }
+    {% endfor -%}
+    {%- for internal_name, internal_declaration in channel_info["Internals"].items() %}
+      {%- set variable = internal_declaration["ASTVariable"] %}
+    for (std::size_t mech_index = 0; mech_index < {{ion_channel_name}}{{channel_suffix}}.neuron_{{ion_channel_name}}_channel_count; ++mech_index)
+    {
+      scal_param_names.push_back("{{ion_channel_name}}_{{variable.name}}" + std::to_string(mech_index));
+    }
+    {% endfor -%}
+    {% endfor -%}
+
+    {%- for concentration_name, concentration_info in conc_info.items() %}
+    {%- for variable_name, variable_info in concentration_info["States"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{concentration_name}}{{concentration_suffix}}.neuron_{{concentration_name}}_concentration_count; ++mech_index)
+    {
+      scal_var_names.push_back("{{variable_name}}" + std::to_string(mech_index));
+    }
+    {% endfor -%}
+    {%- for ode_variable, ode_info in concentration_info["ODEs"].items() %}
+      {%- for propagator, propagator_info in ode_info["transformed_solutions"][0]["propagators"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{concentration_name}}{{concentration_suffix}}.neuron_{{concentration_name}}_concentration_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{concentration_name}}_{{propagator}}" + std::to_string(mech_index));
+    }
+      {% endfor -%}
+    {% endfor -%}
+    {%- for convolution, convolution_info in concentration_info["convolutions"].items() %}
+      {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["propagators"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{concentration_name}}{{concentration_suffix}}.neuron_{{concentration_name}}_concentration_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{concentration_name}}_{{state_variable_name}}" + std::to_string(mech_index));
+    }
+      {% endfor -%}
+    {% endfor -%}
+    {%- for convolution, convolution_info in concentration_info["convolutions"].items() %}
+      {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{concentration_name}}{{concentration_suffix}}.neuron_{{concentration_name}}_concentration_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{concentration_name}}_{{state_variable_name}}" + std::to_string(mech_index));
+    }
+      {% endfor -%}
+    {% endfor -%}
+    for (std::size_t mech_index = 0; mech_index < {{concentration_name}}{{concentration_suffix}}.neuron_{{concentration_name}}_concentration_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{concentration_name}}_v_comp" + std::to_string(mech_index));
+    }
+    for (std::size_t mech_index = 0; mech_index < {{concentration_name}}{{concentration_suffix}}.neuron_{{concentration_name}}_concentration_count; ++mech_index)
+    {
+      scal_var_names.push_back("{{concentration_name}}" + std::to_string(mech_index));
+    }
+    {%- for param_name, param_declaration in concentration_info["Parameters"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{concentration_name}}{{concentration_suffix}}.neuron_{{concentration_name}}_concentration_count; ++mech_index)
+    {
+      scal_param_names.push_back("{{concentration_name}}_{{param_name}}" + std::to_string(mech_index));
+    }
+    {% endfor -%}
+    {%- for internal_name, internal_declaration in concentration_info["Internals"].items() %}
+      {%- set variable = internal_declaration["ASTVariable"] %}
+    for (std::size_t mech_index = 0; mech_index < {{concentration_name}}{{concentration_suffix}}.neuron_{{concentration_name}}_concentration_count; ++mech_index)
+    {
+      scal_param_names.push_back("{{concentration_name}}_{{variable.name}}" + std::to_string(mech_index));
+    }
+    {% endfor -%}
+    {% endfor -%}
+
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    {%- for variable_name, variable_info in receptor_info["States"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count; ++mech_index)
+    {
+      scal_var_names.push_back("{{variable_name}}" + std::to_string(mech_index));
+    }
+    {% endfor -%}
+    {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
+      {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["propagators"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{receptor_name}}_{{state_variable_name}}" + std::to_string(mech_index));
+    }
+      {% endfor -%}
+    {% endfor -%}
+    {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
+      {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{receptor_name}}_{{state_variable_name}}" + std::to_string(mech_index));
+    }
+      {% endfor -%}
+    {% endfor -%}
+    for (std::size_t mech_index = 0; mech_index < {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{receptor_name}}_v_comp" + std::to_string(mech_index));
+    }
+    for (std::size_t mech_index = 0; mech_index < {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{receptor_name}}_s_val" + std::to_string(mech_index));
+    }
+    for (std::size_t mech_index = 0; mech_index < {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count; ++mech_index)
+    {
+      scal_var_names.push_back("i_tot_{{receptor_name}}" + std::to_string(mech_index));
+    }
+    for (std::size_t mech_index = 0; mech_index < {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count; ++mech_index)
+    {
+      scal_var_names.push_back("g_{{receptor_name}}" + std::to_string(mech_index));
+    }
+    for (std::size_t mech_index = 0; mech_index < {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{receptor_name}}_i_val" + std::to_string(mech_index));
+    }
+    for (std::size_t mech_index = 0; mech_index < {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{receptor_name}}_i_tot_dv" + std::to_string(mech_index));
+    }
+    for (std::size_t mech_index = 0; mech_index < {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count; ++mech_index)
+    {
+      scal_var_names.push_back("__{{receptor_name}}_d_i_tot_dv" + std::to_string(mech_index));
+    }
+    {%- for param_name, param_declaration in receptor_info["Parameters"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count; ++mech_index)
+    {
+      scal_param_names.push_back("{{receptor_name}}_{{param_name}}" + std::to_string(mech_index));
+    }
+    {% endfor -%}
+    {%- for internal_name, internal_declaration in receptor_info["internals_used_declared"] %}
+    for (std::size_t mech_index = 0; mech_index < {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count; ++mech_index)
+    {
+      scal_param_names.push_back("{{receptor_name}}_{{internal_name}}" + std::to_string(mech_index));
+    }
+    {% endfor -%}
+    {% endfor -%}
+
+    {%- for continuous_name, continuous_info in con_in_info.items() %}
+    {%- for variable_name, variable_info in continuous_info["States"].items() %}
+    for (std::size_t mech_index = 0; mech_index < {{continuous_name}}{{continuous_suffix}}.neuron_{{continuous_name}}_continuous_input_count; ++mech_index)
+    {
+      scal_var_names.push_back("{{variable_name}}" + std::to_string(mech_index));
+    }
+    {% endfor -%}
+    for (std::size_t mech_index = 0; mech_index < {{continuous_name}}{{continuous_suffix}}.neuron_{{continuous_name}}_continuous_input_count; ++mech_index)
+    {
+      scal_var_names.push_back("i_tot_{{continuous_name}}" + std::to_string(mech_index));
+    }
     {% endfor -%}
   };
 
@@ -457,6 +796,31 @@ public:
     {% endfor -%}
   };
 
+  void sync_recordables(float* var_arr, int n_var, int i_neuron, int base_index, int max_recordables) const
+  {
+    int recordable_offset = base_index;
+
+    {%- for ion_channel_name, channel_info in chan_info.items() %}
+    {{ion_channel_name}}{{channel_suffix}}.sync_recordables(var_arr, n_var, i_neuron, recordable_offset, max_recordables);
+    recordable_offset += max_recordables * ({{channel_info["States"]|length}} + 1);
+    {% endfor -%}
+
+    {%- for concentration_name, concentration_info in conc_info.items() %}
+    {{concentration_name}}{{concentration_suffix}}.sync_recordables(var_arr, n_var, i_neuron, recordable_offset, max_recordables);
+    recordable_offset += max_recordables * ({{concentration_info["States"]|length}} + 1);
+    {% endfor -%}
+
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    {{receptor_name}}{{receptor_suffix}}.sync_recordables(var_arr, n_var, i_neuron, recordable_offset, max_recordables);
+    recordable_offset += max_recordables * ({{receptor_info["States"]|length}} + 2);
+    {% endfor -%}
+
+    {%- for continuous_name, continuous_info in con_in_info.items() %}
+    {{continuous_name}}{{continuous_suffix}}.sync_recordables(var_arr, n_var, i_neuron, recordable_offset, max_recordables);
+    recordable_offset += max_recordables * ({{continuous_info["States"]|length}} + 1);
+    {% endfor -%}
+  };
+
   std::vector< std::pair< double, double > > f_numstep( std::vector< double > v_comp_vec, const long lag )
   {
     std::vector< std::pair< double, double > > comp_to_gi(compartment_number, std::make_pair(0., 0.));
@@ -629,6 +993,46 @@ public:
     {% endfor -%}
 
     return comp_to_gi;
+  };
+
+  void f_numstep_device(float* shared_v_comp, float* compartment_g, float* compartment_i, int compartment_count, const long lag, float* port_input_arr, int port_input_port_step)
+  {
+    if (compartment_count <= 0)
+    {
+      return;
+    }
+    cudaMemset(compartment_g, 0, compartment_count * sizeof(float));
+    cudaMemset(compartment_i, 0, compartment_count * sizeof(float));
+    refresh_device_dependency_buffers(compartment_count);
+
+    {%- for concentration_name, concentration_info in conc_info.items() %}
+    {{ concentration_name }}{{concentration_suffix}}.f_numstep_device(shared_v_comp, lag{% for ode in concentration_info["Dependencies"]["concentrations"] %}, GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% for inline in concentration_info["Dependencies"]["receptors"] %}, GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% for inline in concentration_info["Dependencies"]["channels"] %}, GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% for inline in concentration_info["Dependencies"]["continuous"] %}, GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %});
+    {% endfor -%}
+
+    {%- for ion_channel_name, channel_info in chan_info.items() %}
+    {{ion_channel_name}}{{channel_suffix}}.f_numstep_device(shared_v_comp, lag{% for ode in channel_info["Dependencies"]["concentrations"] %}, GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% for inline in channel_info["Dependencies"]["receptors"] %}, GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% for inline in channel_info["Dependencies"]["channels"] %}, GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% for inline in channel_info["Dependencies"]["continuous"] %}, GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %});
+    {{ion_channel_name}}{{channel_suffix}}.add_currents_to_device(compartment_g, compartment_i, compartment_count);
+    {% endfor -%}
+
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    {{receptor_name}}{{receptor_suffix}}.f_numstep_device(shared_v_comp, lag, port_input_arr, port_input_port_step{% for ode in receptor_info["Dependencies"]["concentrations"] %}, GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% for inline in receptor_info["Dependencies"]["receptors"] %}, GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% for inline in receptor_info["Dependencies"]["channels"] %}, GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% for inline in receptor_info["Dependencies"]["continuous"] %}, GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %});
+    {{receptor_name}}{{receptor_suffix}}.add_currents_to_device(compartment_g, compartment_i, compartment_count);
+    {% endfor -%}
+
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    {%- for synapse_name, synapse_info in syns_info.items() %}
+    {%- with  %}
+    {%- set conc_dep = set(receptor_info["Dependencies"]["concentrations"]).union(synapse_info["Dependencies"]["concentrations"])%}
+    {%- set rec_dep = set(receptor_info["Dependencies"]["receptors"]).union(synapse_info["Dependencies"]["receptors"])%}
+    {%- set chan_dep = set(receptor_info["Dependencies"]["channels"]).union(synapse_info["Dependencies"]["channels"])%}
+    {%- set con_in_dep = set(receptor_info["Dependencies"]["continuous"]).union(synapse_info["Dependencies"]["continuous"])%}
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.f_numstep_device(shared_v_comp, lag, port_input_arr, port_input_port_step{% for ode in conc_dep %}, GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% for inline in rec_dep %}, GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% for inline in chan_dep %}, GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% for inline in con_in_dep %}, GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %});
+    {%- endwith %}
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.add_currents_to_device(compartment_g, compartment_i, compartment_count);
+    {% endfor -%}
+    {% endfor -%}
+
+    cudaDeviceSynchronize();
   };
 
   void postsynaptic_synaptic_processing(double time_resolution){

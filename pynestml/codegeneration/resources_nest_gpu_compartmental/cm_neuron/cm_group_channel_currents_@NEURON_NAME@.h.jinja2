@@ -17,6 +17,7 @@ Ion-channel mechanism classes for NEST GPU compartmental models.
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
+#include <cuda_runtime.h>
 
 {% macro render_variable_type(variable) -%}
 {%- with -%}
@@ -53,11 +54,11 @@ enum {{ ion_channel_name }}VarIndexes
         {%- endfor %}
     {%- endfor %}
 
-  i_v_comp,
+  i_{{ ion_channel_name }}_v_comp,
   i_i_tot_{{ ion_channel_name }},
-  i_g_val,
-  i_i_val,
-  i_d_i_tot_dv,
+  i_{{ ion_channel_name }}_g_val,
+  i_{{ ion_channel_name }}_i_val,
+  i_{{ ion_channel_name }}_d_i_tot_dv,
   N_{{ ion_channel_name }}_VARS
 };
 
@@ -77,6 +78,11 @@ enum {{ ion_channel_name }}ParamIndexes
 
 class {{ion_channel_name}}{{cm_unique_suffix}}{
 private:
+  static constexpr int i_v_comp = i_{{ ion_channel_name }}_v_comp;
+  static constexpr int i_g_val = i_{{ ion_channel_name }}_g_val;
+  static constexpr int i_i_val = i_{{ ion_channel_name }}_i_val;
+  static constexpr int i_d_i_tot_dv = i_{{ ion_channel_name }}_d_i_tot_dv;
+
   std::vector< double > i_tot_{{ion_channel_name}} = {};
   std::vector< double > g_val = {};
   std::vector< double > i_val = {};
@@ -114,48 +120,50 @@ private:
   std::vector< double > {{variable.name}};
   {%- endfor %}
 
-  double* GPU_{{ion_channel_name}}_vars;
-  double* GPU_{{ion_channel_name}}_param;
+  float* GPU_{{ion_channel_name}}_vars = nullptr;
+  float* GPU_{{ion_channel_name}}_param = nullptr;
+  int* GPU_compartment_association = nullptr;
   int* GPU_self_spikes = nullptr;
   double* GPU_time_resolution = nullptr;
+  int recordable_max = 0;
 
-  double* GPU_v_comp;
-  double* GPU_i_tot_{{ion_channel_name}};
-  double* GPU_g_val;
-  double* GPU_i_val;
-  double* GPU_d_i_tot_dv;
+  float* GPU_v_comp;
+  float* GPU_i_tot_{{ion_channel_name}};
+  float* GPU_g_val;
+  float* GPU_i_val;
+  float* GPU_d_i_tot_dv;
 
     //model specific states
     {%- for variable_name, variable_info in channel_info["States"].items() %}
-  double* GPU_{{ variable_name }};
+  float* GPU_{{ variable_name }};
     {%- endfor %}
 
     {%- for ode_variable, ode_info in channel_info["ODEs"].items() %}
       {%- for propagator, propagator_info in ode_info["transformed_solutions"][0]["propagators"].items() %}
-  double* GPU_{{ propagator }};
+  float* GPU_{{ propagator }};
       {%- endfor %}
     {%- endfor %}
 
     {%- for convolution, convolution_info in channel_info["convolutions"].items() %}
         {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["propagators"].items()%}
-  double* GPU_{{state_variable_name}};
+  float* GPU_{{state_variable_name}};
         {%- endfor %}
     {%- endfor %}
 
     {%- for convolution, convolution_info in channel_info["convolutions"].items() %}
         {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items()%}
-  double* GPU_{{state_variable_name}};
+  float* GPU_{{state_variable_name}};
         {%- endfor %}
     {%- endfor %}
 
     //model specific parameters
     {%- for param_name, param_declaration in channel_info["Parameters"].items() %}
-  double* GPU_{{param_name}};
+  float* GPU_{{param_name}};
     {%- endfor %}
 
     {%- for internal_name, internal_declaration in channel_info["Internals"].items() %}
       {%- set variable = internal_declaration["ASTVariable"] %}
-  double* GPU_{{variable.name}};
+  float* GPU_{{variable.name}};
     {%- endfor %}
 
 public:
@@ -169,6 +177,15 @@ public:
     GPU_self_spikes = global_self_spikes;
     GPU_time_resolution = global_time_resolution;
   }
+  void init_recordable_pointers(float*, int, int, int, int)
+  {
+  }
+  void init_base_arrays(float* var_arr, float* param_arr, int n_var, int n_param, int i_neuron, int base_index, int param_base_index, int max_recordables)
+  {
+    GPU_{{ion_channel_name}}_vars = var_arr == nullptr ? nullptr : var_arr + i_neuron * n_var + base_index;
+    GPU_{{ion_channel_name}}_param = param_arr == nullptr ? nullptr : param_arr + i_neuron * n_param + param_base_index;
+    recordable_max = max_recordables;
+  }
 
   std::size_t neuron_{{ ion_channel_name }}_channel_count = 0;
   std::vector< size_t > compartment_association = {};
@@ -177,6 +194,9 @@ public:
                         {% endif %}{% for inline in channel_info["Dependencies"]["receptors"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if channel_info["Dependencies"]["channels"]|length %}
                         {% endif %}{% for inline in channel_info["Dependencies"]["channels"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if channel_info["Dependencies"]["continuous"]|length %}
                         {% endif %}{% for inline in channel_info["Dependencies"]["continuous"] %}, std::vector< double > {{inline.variable_name}}{% endfor %});
+  void f_numstep_device(float* shared_v_comp, long lag{% for ode in channel_info["Dependencies"]["concentrations"] %}, float* dep_{{ode.lhs.name}}{% endfor %}{% for inline in channel_info["Dependencies"]["receptors"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in channel_info["Dependencies"]["channels"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in channel_info["Dependencies"]["continuous"] %}, float* dep_{{inline.variable_name}}{% endfor %});
+  void add_currents_to_device(float* compartment_g, float* compartment_i, int compartment_count) const;
+  void add_total_current_to_device(float* compartment_current, int compartment_count) const;
 
   void f_update(double time_resolution);
   void f_self_spike(double time_resolution);
@@ -194,16 +214,52 @@ public:
   {% endfor %}
 
   void get_currents_per_compartment(std::vector< double >& compartment_to_current);
+  void sync_recordables(float* var_arr, int n_var, int i_neuron, int base_index, int max_recordables) const
+  {
+    int recordable_offset = base_index;
+
+    {%- for variable_name, variable_info in channel_info["States"].items() %}
+    for (std::size_t chan_id = 0; chan_id < neuron_{{ ion_channel_name }}_channel_count; ++chan_id)
+    {
+      const std::size_t slot = chan_id;
+      if (slot < static_cast<std::size_t>(max_recordables))
+      {
+        const float recordable_value = {{variable_name}}.size() > chan_id ? static_cast<float>({{variable_name}}[chan_id]) : 0.0f;
+        cudaMemcpy(var_arr + i_neuron * n_var + recordable_offset + slot,
+                   &recordable_value,
+                   sizeof(float),
+                   cudaMemcpyHostToDevice);
+      }
+    }
+    recordable_offset += max_recordables;
+    {% endfor -%}
+
+    for (std::size_t chan_id = 0; chan_id < neuron_{{ ion_channel_name }}_channel_count; ++chan_id)
+    {
+      const std::size_t slot = chan_id;
+      if (slot < static_cast<std::size_t>(max_recordables))
+      {
+        const float recordable_value = i_tot_{{ion_channel_name}}.size() > chan_id ? static_cast<float>(i_tot_{{ion_channel_name}}[chan_id]) : 0.0f;
+        cudaMemcpy(var_arr + i_neuron * n_var + recordable_offset + slot,
+                   &recordable_value,
+                   sizeof(float),
+                   cudaMemcpyHostToDevice);
+      }
+    }
+  }
+
   void debug_print_i_tot(const std::string& mechanism_name, const std::size_t neuron_index, const long lag) const
   {
     for (std::size_t chan_id = 0; chan_id < neuron_{{ ion_channel_name }}_channel_count; ++chan_id)
     {
+      float i_tot_value = 0.0f;
+      cudaMemcpy(&i_tot_value, GPU_i_tot_{{ion_channel_name}} + chan_id, sizeof(float), cudaMemcpyDeviceToHost);
       std::cout << "[{{neuronName}} debug] neuron=" << neuron_index
                 << " lag=" << lag
                 << " mechanism=" << mechanism_name
                 << " channel_index=" << chan_id
                 << " compartment=" << compartment_association[chan_id]
-                << " i_tot=" << i_tot_{{ion_channel_name}}[chan_id]
+                << " i_tot=" << i_tot_value
                 << std::endl;
     }
   }

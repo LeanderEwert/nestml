@@ -31,6 +31,7 @@ RECEPTOR_MODEL_NAME = "cm_ampa_only_nestml"
 CHANNEL_MODEL_NAME = "cm_channel_only_nestml"
 CONTINUOUS_MODEL_NAME = "cm_continuous_only_nestml"
 CONCENTRATION_MODEL_NAME = "cm_concentration_only_nestml"
+DEPENDENCY_MODEL_NAME = "cm_dependency_nestml"
 
 
 class TestNESTGPUCompartmentalCodeGenerator:
@@ -39,6 +40,7 @@ class TestNESTGPUCompartmentalCodeGenerator:
     CHANNEL_MODEL_NAME = CHANNEL_MODEL_NAME
     CONTINUOUS_MODEL_NAME = CONTINUOUS_MODEL_NAME
     CONCENTRATION_MODEL_NAME = CONCENTRATION_MODEL_NAME
+    DEPENDENCY_MODEL_NAME = DEPENDENCY_MODEL_NAME
 
     generated_files = {
         "cm_ampa_only_nestml.cu",
@@ -52,7 +54,7 @@ class TestNESTGPUCompartmentalCodeGenerator:
         "cm_group_currents_cm_ampa_only_nestml.h",
         "cm_group_receptor_currents_cm_ampa_only_nestml.cu",
         "cm_group_receptor_currents_cm_ampa_only_nestml.h",
-        "cm_tree_cm_ampa_only_nestml.cpp",
+        "cm_tree_cm_ampa_only_nestml.cu",
         "cm_tree_cm_ampa_only_nestml.h",
     }
 
@@ -68,7 +70,7 @@ class TestNESTGPUCompartmentalCodeGenerator:
         "cm_group_currents_cm_channel_only_nestml.h",
         "cm_group_receptor_currents_cm_channel_only_nestml.cu",
         "cm_group_receptor_currents_cm_channel_only_nestml.h",
-        "cm_tree_cm_channel_only_nestml.cpp",
+        "cm_tree_cm_channel_only_nestml.cu",
         "cm_tree_cm_channel_only_nestml.h",
     }
 
@@ -84,7 +86,7 @@ class TestNESTGPUCompartmentalCodeGenerator:
         "cm_group_currents_cm_continuous_only_nestml.h",
         "cm_group_receptor_currents_cm_continuous_only_nestml.cu",
         "cm_group_receptor_currents_cm_continuous_only_nestml.h",
-        "cm_tree_cm_continuous_only_nestml.cpp",
+        "cm_tree_cm_continuous_only_nestml.cu",
         "cm_tree_cm_continuous_only_nestml.h",
     }
 
@@ -100,8 +102,24 @@ class TestNESTGPUCompartmentalCodeGenerator:
         "cm_group_currents_cm_concentration_only_nestml.h",
         "cm_group_receptor_currents_cm_concentration_only_nestml.cu",
         "cm_group_receptor_currents_cm_concentration_only_nestml.h",
-        "cm_tree_cm_concentration_only_nestml.cpp",
+        "cm_tree_cm_concentration_only_nestml.cu",
         "cm_tree_cm_concentration_only_nestml.h",
+    }
+
+    dependency_generated_files = {
+        "cm_dependency_nestml.cu",
+        "cm_dependency_nestml.h",
+        "cm_group_channel_currents_cm_dependency_nestml.cu",
+        "cm_group_channel_currents_cm_dependency_nestml.h",
+        "cm_group_concentration_currents_cm_dependency_nestml.cu",
+        "cm_group_concentration_currents_cm_dependency_nestml.h",
+        "cm_group_continuous_input_currents_cm_dependency_nestml.cu",
+        "cm_group_continuous_input_currents_cm_dependency_nestml.h",
+        "cm_group_currents_cm_dependency_nestml.h",
+        "cm_group_receptor_currents_cm_dependency_nestml.cu",
+        "cm_group_receptor_currents_cm_dependency_nestml.h",
+        "cm_tree_cm_dependency_nestml.cu",
+        "cm_tree_cm_dependency_nestml.h",
     }
 
     def generate_model(self, model_file, target_path, module_name, nest_gpu_path=None, register_neuron_model=True,
@@ -164,6 +182,16 @@ class TestNESTGPUCompartmentalCodeGenerator:
             "cm_concentration_only.nestml",
             target_path,
             "cm_concentration_only_gpu_module",
+            nest_gpu_path=nest_gpu_path,
+            register_neuron_model=register_neuron_model,
+            skip_build=skip_build,
+        )
+
+    def generate_dependency_model(self, target_path, nest_gpu_path=None, register_neuron_model=True, skip_build=False):
+        self.generate_model(
+            "cm_dependency.nestml",
+            target_path,
+            "cm_dependency_gpu_module",
             nest_gpu_path=nest_gpu_path,
             register_neuron_model=register_neuron_model,
             skip_build=skip_build,
@@ -261,6 +289,29 @@ class TestNESTGPUCompartmentalCodeGenerator:
 
         self.run_concentration_only_simulation_smoke()
 
+    def test_dependency_generation_into_real_nest_gpu_source(self):
+        tests_path = os.path.realpath(os.path.dirname(__file__))
+        target_path = os.path.join(tests_path, self.TARGET_DIR)
+        nest_gpu_path = os.environ.get("NEST_GPU", os.getcwd())
+        nest_gpu_src_path = os.path.join(nest_gpu_path, "src")
+        cmakelists_path = os.path.join(nest_gpu_src_path, "CMakeLists.txt")
+
+        assert os.path.isdir(nest_gpu_src_path)
+        assert os.path.isfile(cmakelists_path)
+
+        self.generate_dependency_model(target_path)
+
+        for filename in self.dependency_generated_files:
+            assert os.path.isfile(os.path.join(target_path, filename))
+            assert os.path.isfile(os.path.join(nest_gpu_src_path, filename))
+
+        with open(cmakelists_path, encoding="utf-8") as cmakelists_file:
+            cmakelists = cmakelists_file.read()
+        for filename in self.dependency_generated_files:
+            assert filename in cmakelists
+
+        self.run_dependency_simulation_smoke()
+
     def run_receptor_only_simulation_smoke(self):
         self.run_smoke_in_subprocess("receptor")
 
@@ -272,6 +323,9 @@ class TestNESTGPUCompartmentalCodeGenerator:
 
     def run_concentration_only_simulation_smoke(self):
         self.run_smoke_in_subprocess("concentration")
+
+    def run_dependency_simulation_smoke(self):
+        self.run_smoke_in_subprocess("dependency")
 
     @staticmethod
     def run_smoke_in_subprocess(smoke_name):
