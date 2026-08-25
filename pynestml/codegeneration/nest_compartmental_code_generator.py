@@ -151,15 +151,13 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
         "weight_variable": {}
     }
 
-    _fp_precision = "double"
     _variable_matching_template = r"(\b)({})(\b)"
     _model_templates = dict()
     _module_templates = list()
 
     def __init__(self, options: Optional[Mapping[str, Any]] = None):
-        super().__init__(options)
-
         self._nest_code_generator = NESTCodeGenerator(options)
+        super().__init__(options)
 
         # auto-detect NEST Simulator installed version
         if not self.option_exists("nest_version") or not self.get_option("nest_version"):
@@ -172,6 +170,7 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
         # those state variables not defined as an ODE in the equations block
         self.non_equations_state_variables = {}
 
+        self._fp_precision = self.get_option("fp_precision")
         self.setup_template_env()
 
         self.setup_printers()

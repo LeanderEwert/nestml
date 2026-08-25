@@ -91,6 +91,7 @@ class TestCmThirdFactorStdpSynapse:
         active_weight_change = abs(active["weight"][-1] - active["weight"][0])
 
         self._plot_results(blocked, active)
+        self._print_weight_differences(blocked, active)
 
         assert blocked_weight_change < 1e-6
         assert active_weight_change > 1e-4
@@ -228,3 +229,20 @@ class TestCmThirdFactorStdpSynapse:
         ax.plot(blocked["times"], blocked[variable_name], label="third factor blocked")
         ax.plot(active["times"], active[variable_name], linestyle="--", label="third factor active")
         ax.set_title(title)
+
+    @staticmethod
+    def _print_weight_differences(blocked, active):
+        blocked_change = blocked["weight"][-1] - blocked["weight"][0]
+        active_change = active["weight"][-1] - active["weight"][0]
+        final_difference = active["weight"][-1] - blocked["weight"][-1]
+
+        print("Third-factor STDP weight differences:")
+        print(
+            f"  blocked: initial={blocked['weight'][0]:.12g}, "
+            f"final={blocked['weight'][-1]:.12g}, diff={blocked_change:.12g}"
+        )
+        print(
+            f"  active: initial={active['weight'][0]:.12g}, "
+            f"final={active['weight'][-1]:.12g}, diff={active_change:.12g}"
+        )
+        print(f"  active final - blocked final: {final_difference:.12g}")

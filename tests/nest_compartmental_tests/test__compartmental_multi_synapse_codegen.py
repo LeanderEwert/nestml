@@ -249,6 +249,8 @@ class TestCompartmentalMultiSynapseCodegen(unittest.TestCase):
             if sp_td_value != 0
         ]
 
+        self.print_weight_differences(synapse_case, rec_nest_runs, nest_values, nestml_values, signed_diff_values)
+
         if TEST_PLOTS:
             self.plot_comparison(synapse_case, rec_nest_runs, rec_nestml_runs, signed_diff_values)
 
@@ -256,6 +258,20 @@ class TestCompartmentalMultiSynapseCodegen(unittest.TestCase):
             "the maximum weight difference is too large! ("
             + str(max(abs_diff_values))
             + " > 0.01)")
+
+    @staticmethod
+    def print_weight_differences(synapse_case, rec_nest_runs, nest_values, nestml_values, diff_values):
+        print(f"Compartmental {synapse_case['nestml_synapse']} final weight differences (nestml - nest):")
+        for recording, nest_value, nestml_value, diff_value in zip(
+            rec_nest_runs,
+            nest_values,
+            nestml_values,
+            diff_values,
+        ):
+            print(
+                f"  spike time difference {recording['sp_td']:.6g} ms: "
+                f"nest={nest_value:.12g}, nestml={nestml_value:.12g}, diff={diff_value:.12g}"
+            )
 
     def plot_comparison(self, synapse_case, rec_nest_runs, rec_nestml_runs, diff_values):
         fig, axs = plt.subplots(4)

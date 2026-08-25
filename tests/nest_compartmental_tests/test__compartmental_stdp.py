@@ -301,6 +301,13 @@ class TestCompartmentalConcmech(unittest.TestCase):
             if sp_td_value != 0
         ]
 
+        print("Compartmental STDP final weight differences (nestml - nest):")
+        for sp_td_value, nest_value, nestml_value, diff_value in zip(sp_td, nest_values, nestml_values, diff_values):
+            print(
+                f"  spike time difference {sp_td_value:.6g} ms: "
+                f"nest={nest_value:.12g}, nestml={nestml_value:.12g}, diff={diff_value:.12g}"
+            )
+
         axs[1].vlines(sp_td, 0, diff_values, color="red", label="diff", linewidth=3)
 
         axs[0].set_title("resulting weights")
