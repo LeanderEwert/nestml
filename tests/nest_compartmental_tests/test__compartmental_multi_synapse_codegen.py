@@ -261,7 +261,10 @@ class TestCompartmentalMultiSynapseCodegen(unittest.TestCase):
 
     @staticmethod
     def print_weight_differences(synapse_case, rec_nest_runs, nest_values, nestml_values, diff_values):
-        print(f"Compartmental {synapse_case['nestml_synapse']} final weight differences (nestml - nest):")
+        print(
+            f"Compartmental {synapse_case['nest_synapse']} / "
+            f"{synapse_case['nestml_receptor']} final weight differences (nestml - nest):"
+        )
         for recording, nest_value, nestml_value, diff_value in zip(
             rec_nest_runs,
             nest_values,
