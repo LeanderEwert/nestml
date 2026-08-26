@@ -39,63 +39,6 @@ except BaseException:
     TEST_PLOTS = False
 
 
-DT = 0.1
-SIM_TIME = 45.0
-
-RECORDABLES = [
-    "v_comp0",
-    "v_comp1",
-    "v_comp2",
-    "m_Na0",
-    "h_Na0",
-    "n_K0",
-    "m_Na1",
-    "h_Na1",
-    "n_K1",
-    "m_Na2",
-    "h_Na2",
-    "n_K2",
-    "g_AN_AMPA0",
-    "g_AN_NMDA0",
-    "g_AN_AMPA1",
-    "g_AN_NMDA1",
-    "g_AN_AMPA2",
-    "g_AN_NMDA2",
-]
-
-BASE_SOMA_PARAMS = {
-    "C_m": 89.245535,
-    "g_C": 0.0,
-    "g_L": 8.924572508,
-    "e_L": -75.0,
-    "v_comp": -75.0,
-    "gbar_Na": 4608.698576715,
-    "e_Na": 60.0,
-    "gbar_K": 956.112772900,
-    "e_K": -90.0,
-}
-
-BASE_DEND_PARAMS = {
-    "C_m": 1.929929,
-    "g_C": 1.255439494,
-    "g_L": 0.192992878,
-    "e_L": -75.0,
-    "v_comp": -75.0,
-    "gbar_Na": 17.203212493,
-    "e_Na": 60.0,
-    "gbar_K": 11.887347450,
-    "e_K": -90.0,
-}
-
-SOMA_CAPACITANCE_SCALE = 0.75           # Shortens the somatic membrane time constant while staying close to the baseline.
-DEND_COUPLING_SCALE = 1.8               # Makes voltage changes propagate through the cable during the short burst windows.
-PROXIMAL_DEND_CHANNEL_SCALE = 12.0      # Makes dendritic Na/K currents clearly visible at 0.1 ms resolution.
-DISTAL_DEND_CHANNEL_SCALE = 8.0         # Keeps distal dynamics active but weaker than the proximal compartment.
-DISTAL_DEND_CAPACITANCE_SCALE = 0.75    # Makes the distal voltage respond within a few 0.1 ms steps.
-AMPA_TAU_SCALE = 0.6                    # Puts the AMPA rise time near one 0.1 ms step, stressing exponential propagators.
-NMDA_TAU_SCALE = 1.0 / 3.0              # Shortens the 43 ms NMDA decay while keeping it slower than the scaled AMPA decay.
-
-
 def _scaled_params(base_params, scales=None, updates=None):
     params = copy.deepcopy(base_params)
     for name, scale in (scales or {}).items():
@@ -104,69 +47,124 @@ def _scaled_params(base_params, scales=None, updates=None):
     return params
 
 
-COMPARTMENTS = [
-    {
-        "parent_idx": -1,
-        "params": _scaled_params(BASE_SOMA_PARAMS, {"C_m": SOMA_CAPACITANCE_SCALE}),
-    },
-    {
-        "parent_idx": 0,
-        "params": _scaled_params(
-            BASE_DEND_PARAMS,
-            {
-                "g_C": DEND_COUPLING_SCALE,
-                "gbar_Na": PROXIMAL_DEND_CHANNEL_SCALE,
-                "gbar_K": PROXIMAL_DEND_CHANNEL_SCALE,
-            },
-            {"e_L": -74.0, "v_comp": -74.0},
-        ),
-    },
-    {
-        "parent_idx": 1,
-        "params": _scaled_params(
-            BASE_DEND_PARAMS,
-            {
-                "C_m": DISTAL_DEND_CAPACITANCE_SCALE,
-                "g_C": DEND_COUPLING_SCALE,
-                "gbar_Na": DISTAL_DEND_CHANNEL_SCALE,
-                "gbar_K": DISTAL_DEND_CHANNEL_SCALE,
-            },
-            {"e_L": -73.0, "v_comp": -73.0},
-        ),
-    },
-]
-
-RECEPTOR_PARAMS = {
-    "tau_r_AN_AMPA": 0.2 * AMPA_TAU_SCALE,
-    "tau_d_AN_AMPA": 3.0 * AMPA_TAU_SCALE,
-    "tau_r_AN_NMDA": 0.2 / AMPA_TAU_SCALE,
-    "tau_d_AN_NMDA": 43.0 * NMDA_TAU_SCALE,
-    "NMDA_ratio": 2.0,
-}
-
-VARIANTS = {
-    "reference": {
-        "module_name": "cm_accuracy_double_module",
-        "suffix": "_accuracy_double_nestml",
-        "model_name": "cm_default_accuracy_double_nestml",
-        "codegen_opts": {"use_fastexp": False},
-    },
-    "double_fastexp": {
-        "module_name": "cm_accuracy_double_fastexp_module",
-        "suffix": "_accuracy_double_fastexp_nestml",
-        "model_name": "cm_default_accuracy_double_fastexp_nestml",
-        "codegen_opts": {"use_fastexp": True},
-    },
-}
-
-
 class TestFastExpAccuracy:
+    DT = 0.1
+    SIM_TIME = 45.0
+
+    RECORDABLES = [
+        "v_comp0",
+        "v_comp1",
+        "v_comp2",
+        "m_Na0",
+        "h_Na0",
+        "n_K0",
+        "m_Na1",
+        "h_Na1",
+        "n_K1",
+        "m_Na2",
+        "h_Na2",
+        "n_K2",
+        "g_AN_AMPA0",
+        "g_AN_NMDA0",
+        "g_AN_AMPA1",
+        "g_AN_NMDA1",
+        "g_AN_AMPA2",
+        "g_AN_NMDA2",
+    ]
+
+    BASE_SOMA_PARAMS = {
+        "C_m": 89.245535,
+        "g_C": 0.0,
+        "g_L": 8.924572508,
+        "e_L": -75.0,
+        "v_comp": -75.0,
+        "gbar_Na": 4608.698576715,
+        "e_Na": 60.0,
+        "gbar_K": 956.112772900,
+        "e_K": -90.0,
+    }
+
+    BASE_DEND_PARAMS = {
+        "C_m": 1.929929,
+        "g_C": 1.255439494,
+        "g_L": 0.192992878,
+        "e_L": -75.0,
+        "v_comp": -75.0,
+        "gbar_Na": 17.203212493,
+        "e_Na": 60.0,
+        "gbar_K": 11.887347450,
+        "e_K": -90.0,
+    }
+
+    SOMA_CAPACITANCE_SCALE = 0.75
+    DEND_COUPLING_SCALE = 1.8
+    PROXIMAL_DEND_CHANNEL_SCALE = 12.0
+    DISTAL_DEND_CHANNEL_SCALE = 8.0
+    DISTAL_DEND_CAPACITANCE_SCALE = 0.75
+    AMPA_TAU_SCALE = 0.6
+    NMDA_TAU_SCALE = 1.0 / 3.0
+
+    COMPARTMENTS = [
+        {
+            "parent_idx": -1,
+            "params": _scaled_params(BASE_SOMA_PARAMS, {"C_m": SOMA_CAPACITANCE_SCALE}),
+        },
+        {
+            "parent_idx": 0,
+            "params": _scaled_params(
+                BASE_DEND_PARAMS,
+                {
+                    "g_C": DEND_COUPLING_SCALE,
+                    "gbar_Na": PROXIMAL_DEND_CHANNEL_SCALE,
+                    "gbar_K": PROXIMAL_DEND_CHANNEL_SCALE,
+                },
+                {"e_L": -74.0, "v_comp": -74.0},
+            ),
+        },
+        {
+            "parent_idx": 1,
+            "params": _scaled_params(
+                BASE_DEND_PARAMS,
+                {
+                    "C_m": DISTAL_DEND_CAPACITANCE_SCALE,
+                    "g_C": DEND_COUPLING_SCALE,
+                    "gbar_Na": DISTAL_DEND_CHANNEL_SCALE,
+                    "gbar_K": DISTAL_DEND_CHANNEL_SCALE,
+                },
+                {"e_L": -73.0, "v_comp": -73.0},
+            ),
+        },
+    ]
+
+    RECEPTOR_PARAMS = {
+        "tau_r_AN_AMPA": 0.2 * AMPA_TAU_SCALE,
+        "tau_d_AN_AMPA": 3.0 * AMPA_TAU_SCALE,
+        "tau_r_AN_NMDA": 0.2 / AMPA_TAU_SCALE,
+        "tau_d_AN_NMDA": 43.0 * NMDA_TAU_SCALE,
+        "NMDA_ratio": 2.0,
+    }
+
+    VARIANTS = {
+        "reference": {
+            "module_name": "cm_accuracy_double_module",
+            "suffix": "_accuracy_double_nestml",
+            "model_name": "cm_default_accuracy_double_nestml",
+            "codegen_opts": {"use_fastexp": False},
+        },
+        "double_fastexp": {
+            "module_name": "cm_accuracy_double_fastexp_module",
+            "suffix": "_accuracy_double_fastexp_nestml",
+            "model_name": "cm_default_accuracy_double_fastexp_nestml",
+            "codegen_opts": {"use_fastexp": True},
+        },
+    }
+
     @pytest.fixture(scope="class", autouse=True)
     def setup_models(self):
         tests_path = os.path.realpath(os.path.dirname(__file__))
         input_path = os.path.join(tests_path, "resources", "cm_default.nestml")
 
-        for variant_name, variant in VARIANTS.items():
+        for variant_name, variant in self.VARIANTS.items():
             target_path = os.path.join(tests_path, "target", "fastexp_accuracy", variant_name)
             install_path = os.path.join(target_path, "install")
             os.makedirs(target_path, exist_ok=True)
@@ -195,7 +193,7 @@ class TestFastExpAccuracy:
         np.testing.assert_allclose(result["times"], reference_trace["times"])
         self._plot_comparison(reference_trace, result, variant_name)
 
-        for variable in RECORDABLES:
+        for variable in self.RECORDABLES:
             assert np.all(np.isfinite(reference_trace[variable]))
             assert np.all(np.isfinite(result[variable]))
 
@@ -207,7 +205,7 @@ class TestFastExpAccuracy:
         np.testing.assert_allclose(result["spike_times"], reference_trace["spike_times"], atol=0.5, rtol=0.0)
 
     def test_fastexp_variant_uses_fast_propagator_function(self):
-        variant = VARIANTS["double_fastexp"]
+        variant = self.VARIANTS["double_fastexp"]
         source_path = os.path.join(
             variant["target_path"],
             "cm_neuroncurrents_" + variant["model_name"] + ".cpp",
@@ -220,19 +218,19 @@ class TestFastExpAccuracy:
 
     @staticmethod
     def _run_variant(variant_name):
-        variant = VARIANTS[variant_name]
+        variant = TestFastExpAccuracy.VARIANTS[variant_name]
 
         nest.ResetKernel()
-        nest.SetKernelStatus({"resolution": DT})
+        nest.SetKernelStatus({"resolution": TestFastExpAccuracy.DT})
         nest.Install(variant["module_path"])
 
         neuron = nest.Create(variant["model_name"])
         neuron.V_th = -50.0
-        neuron.compartments = copy.deepcopy(COMPARTMENTS)
+        neuron.compartments = copy.deepcopy(TestFastExpAccuracy.COMPARTMENTS)
         neuron.receptors = [
-            {"comp_idx": 0, "receptor_type": "AMPA_NMDA", "params": copy.deepcopy(RECEPTOR_PARAMS)},
-            {"comp_idx": 1, "receptor_type": "AMPA_NMDA", "params": copy.deepcopy(RECEPTOR_PARAMS)},
-            {"comp_idx": 2, "receptor_type": "AMPA_NMDA", "params": copy.deepcopy(RECEPTOR_PARAMS)},
+            {"comp_idx": 0, "receptor_type": "AMPA_NMDA", "params": copy.deepcopy(TestFastExpAccuracy.RECEPTOR_PARAMS)},
+            {"comp_idx": 1, "receptor_type": "AMPA_NMDA", "params": copy.deepcopy(TestFastExpAccuracy.RECEPTOR_PARAMS)},
+            {"comp_idx": 2, "receptor_type": "AMPA_NMDA", "params": copy.deepcopy(TestFastExpAccuracy.RECEPTOR_PARAMS)},
         ]
 
         # The small dendritic capacitances, active conductances in all
@@ -252,21 +250,28 @@ class TestFastExpAccuracy:
                 syn_spec={
                     "synapse_model": "static_synapse",
                     "weight": weight,
-                    "delay": DT,
+                    "delay": TestFastExpAccuracy.DT,
                     "receptor_type": receptor_idx,
                 },
             )
 
-        multimeter = nest.Create("multimeter", 1, {"record_from": RECORDABLES, "interval": DT})
+        multimeter = nest.Create(
+            "multimeter",
+            1,
+            {"record_from": TestFastExpAccuracy.RECORDABLES, "interval": TestFastExpAccuracy.DT},
+        )
         nest.Connect(multimeter, neuron)
         spike_recorder = nest.Create("spike_recorder")
         nest.Connect(neuron, spike_recorder)
 
-        nest.Simulate(SIM_TIME)
+        nest.Simulate(TestFastExpAccuracy.SIM_TIME)
         multimeter_events = nest.GetStatus(multimeter, "events")[0]
         spike_events = nest.GetStatus(spike_recorder, "events")[0]
 
-        result = {variable: np.asarray(multimeter_events[variable]) for variable in ["times"] + RECORDABLES}
+        result = {
+            variable: np.asarray(multimeter_events[variable])
+            for variable in ["times"] + TestFastExpAccuracy.RECORDABLES
+        }
         result["spike_times"] = np.asarray(spike_events["times"])
         return result
 
@@ -353,7 +358,7 @@ class TestFastExpAccuracy:
             propagator_ax.plot(voltages, fastexp, linestyle="--", label=f"{name} fastexp")
 
         tau_ax.axhline(
-            DT / 2.0,
+            TestFastExpAccuracy.DT / 2.0,
             linestyle="--",
             color="black",
             linewidth=1.0,
@@ -412,12 +417,12 @@ class TestFastExpAccuracy:
     @staticmethod
     def _exact_propagator(tau_values):
         with np.errstate(divide="ignore", invalid="ignore"):
-            return np.exp(-DT / tau_values)
+            return np.exp(-TestFastExpAccuracy.DT / tau_values)
 
     @staticmethod
     def _bounded_fast_propagator(tau_values):
         with np.errstate(divide="ignore", invalid="ignore"):
-            x = -DT / tau_values
+            x = -TestFastExpAccuracy.DT / tau_values
             xc = np.minimum(-1.0e-12, np.maximum(-2.0, x))
             return 0.9999833698215348 + xc * (
                 0.9993709968710967 + xc * (
