@@ -41,215 +41,31 @@ extern __constant__ float NESTGPUTimeResolution;
 namespace {{neuronName}}_ns
 {
 enum ScalVarIndexes {
-{%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i_v_comp{{compartment_recordable_index}},
-{%- endfor %}
-{%- for ion_channel_name, channel_info in chan_info.items() %}
-  {%- for variable_name, variable_info in channel_info["States"].items() %}
-    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i_{{variable_name}}{{compartment_recordable_index}},
-    {%- endfor %}
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i_i_tot_{{ion_channel_name}}{{compartment_recordable_index}},
-  {%- endfor %}
-{%- endfor %}
-{%- for concentration_name, concentration_info in conc_info.items() %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i_{{concentration_name}}{{compartment_recordable_index}},
-  {%- endfor %}
-  {%- for variable_name, variable_info in concentration_info["States"].items() %}
-    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i_{{variable_name}}{{compartment_recordable_index}},
-    {%- endfor %}
-  {%- endfor %}
-{%- endfor %}
-{%- for receptor_name, receptor_info in recs_info.items() %}
-  {%- for variable_name, variable_info in receptor_info["States"].items() %}
-    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i_{{variable_name}}{{compartment_recordable_index}},
-    {%- endfor %}
-  {%- endfor %}
-  {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
-    {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["propagators"].items() %}
-      {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i___{{receptor_name}}_{{state_variable_name}}{{compartment_recordable_index}},
-      {%- endfor %}
-    {%- endfor %}
-  {%- endfor %}
-  {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
-    {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items() %}
-      {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i___{{receptor_name}}_{{state_variable_name}}{{compartment_recordable_index}},
-      {%- endfor %}
-    {%- endfor %}
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i___{{receptor_name}}_v_comp{{compartment_recordable_index}},
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i___{{receptor_name}}_s_val{{compartment_recordable_index}},
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i_i_tot_{{receptor_name}}{{compartment_recordable_index}},
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i_g_{{receptor_name}}{{compartment_recordable_index}},
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i___{{receptor_name}}_i_val{{compartment_recordable_index}},
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i___{{receptor_name}}_i_tot_dv{{compartment_recordable_index}},
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i___{{receptor_name}}_d_i_tot_dv{{compartment_recordable_index}},
-  {%- endfor %}
-{%- endfor %}
-{%- for continuous_name, continuous_info in con_in_info.items() %}
-  {%- for variable_name, variable_info in continuous_info["States"].items() %}
-    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i_{{variable_name}}{{compartment_recordable_index}},
-    {%- endfor %}
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i_i_tot_{{continuous_name}}{{compartment_recordable_index}},
-  {%- endfor %}
-{%- endfor %}
   N_SCAL_VAR
 };
 
 enum ScalParamIndexes {
-{%- for receptor_name, receptor_info in recs_info.items() %}
-  {%- for param_name, param_declaration in receptor_info["Parameters"].items() %}
-    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i_{{receptor_name}}_{{param_name}}{{compartment_recordable_index}},
-    {%- endfor %}
-  {%- endfor %}
-  {%- for internal_name, internal_declaration in receptor_info["internals_used_declared"] %}
-    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  i_{{receptor_name}}_{{internal_name}}{{compartment_recordable_index}},
-    {%- endfor %}
-  {%- endfor %}
-{%- endfor %}
   N_SCAL_PARAM
 };
 
 enum PortVarIndexes {
-{%- for variable_symbol in neuron.get_spike_input_ports() %}
-  i_{{variable_symbol.get_symbol_name()}},
-{%- endfor %}
   N_PORT_VAR
 };
 
-const std::string {{neuronName}}_scal_var_name[N_SCAL_VAR] = {
-{%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "v_comp{{compartment_recordable_index}}",
-{%- endfor %}
-{%- for ion_channel_name, channel_info in chan_info.items() %}
-  {%- for variable_name, variable_info in channel_info["States"].items() %}
-    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "{{variable_name}}{{compartment_recordable_index}}",
-    {%- endfor %}
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "i_tot_{{ion_channel_name}}{{compartment_recordable_index}}",
-  {%- endfor %}
-{%- endfor %}
-{%- for concentration_name, concentration_info in conc_info.items() %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "{{concentration_name}}{{compartment_recordable_index}}",
-  {%- endfor %}
-  {%- for variable_name, variable_info in concentration_info["States"].items() %}
-    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "{{variable_name}}{{compartment_recordable_index}}",
-    {%- endfor %}
-  {%- endfor %}
-{%- endfor %}
-{%- for receptor_name, receptor_info in recs_info.items() %}
-  {%- for variable_name, variable_info in receptor_info["States"].items() %}
-    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "{{variable_name}}{{compartment_recordable_index}}",
-    {%- endfor %}
-  {%- endfor %}
-  {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
-    {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["propagators"].items() %}
-      {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "__{{receptor_name}}_{{state_variable_name}}{{compartment_recordable_index}}",
-      {%- endfor %}
-    {%- endfor %}
-  {%- endfor %}
-  {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
-    {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items() %}
-      {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "__{{receptor_name}}_{{state_variable_name}}{{compartment_recordable_index}}",
-      {%- endfor %}
-    {%- endfor %}
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "__{{receptor_name}}_v_comp{{compartment_recordable_index}}",
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "__{{receptor_name}}_s_val{{compartment_recordable_index}}",
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "i_tot_{{receptor_name}}{{compartment_recordable_index}}",
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "g_{{receptor_name}}{{compartment_recordable_index}}",
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "__{{receptor_name}}_i_val{{compartment_recordable_index}}",
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "__{{receptor_name}}_i_tot_dv{{compartment_recordable_index}}",
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "__{{receptor_name}}_d_i_tot_dv{{compartment_recordable_index}}",
-  {%- endfor %}
-{%- endfor %}
-{%- for continuous_name, continuous_info in con_in_info.items() %}
-  {%- for variable_name, variable_info in continuous_info["States"].items() %}
-    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "{{variable_name}}{{compartment_recordable_index}}",
-    {%- endfor %}
-  {%- endfor %}
-  {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "i_tot_{{continuous_name}}{{compartment_recordable_index}}",
-  {%- endfor %}
-{%- endfor %}
+const std::string {{neuronName}}_scal_var_name[1] = {
 };
 
-const std::string {{neuronName}}_scal_param_name[N_SCAL_PARAM] = {
-{%- for receptor_name, receptor_info in recs_info.items() %}
-  {%- for param_name, param_declaration in receptor_info["Parameters"].items() %}
-    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "{{receptor_name}}_{{param_name}}{{compartment_recordable_index}}",
-    {%- endfor %}
-  {%- endfor %}
-  {%- for internal_name, internal_declaration in receptor_info["internals_used_declared"] %}
-    {%- for compartment_recordable_index in range(gpu_compartment_recordables_count) %}
-  "{{receptor_name}}_{{internal_name}}{{compartment_recordable_index}}",
-    {%- endfor %}
-  {%- endfor %}
-{%- endfor %}
+const std::string {{neuronName}}_scal_param_name[1] = {
 };
 
-const std::string {{neuronName}}_port_var_name[N_PORT_VAR] = {
-{%- for variable_symbol in neuron.get_spike_input_ports() %}
-  "{{variable_symbol.get_symbol_name()}}",
-{%- endfor %}
+const std::string {{neuronName}}_port_var_name[1] = {
 };
 
 enum GroupParamIndexes {
-  i_h_min_rel = 0,  // Min. step in ODE integr. relative to time resolution
-  i_h0_rel,         // Starting step in ODE integr. relative to time resolution
   N_GROUP_PARAM
 };
 
-const std::string {{neuronName}}_group_param_name[N_GROUP_PARAM] = {
-  "h_min_rel",
-  "h0_rel"
+const std::string {{neuronName}}_group_param_name[1] = {
 };
 
 }; // namespace
@@ -259,9 +75,6 @@ class {{neuronName}} : public BaseNeuron
  public:
   {{neuronName}}() { receivesDict = true; }
 
-  float h_min_;
-  float h_;
-
   int Init(int i_node_0, int n_neuron, int n_port, int i_group);
 
   int Calibrate(double time_min, float time_resolution);
@@ -270,14 +83,17 @@ class {{neuronName}} : public BaseNeuron
 
   int SetNeuronVariablesDict(int i_neuron, int n_neuron, nlohmann::json dict);
 
+  float* GetVarPt(int i_neuron, std::string var_name, int port = 0) override;
+
  private:
   struct HostNeuronState
   {
     HostNeuronState()
       : c_tree()
-      , syn_buffers(0)
+      , next_input_index(0)
       , self_spikes(0)
       , GPU_self_spikes(nullptr)
+      , GPU_previous_soma_voltage(nullptr)
       , time_resolution(0.1)
       , GPU_time_resolution(nullptr)
       , V_th(-55.0)
@@ -285,17 +101,19 @@ class {{neuronName}} : public BaseNeuron
     }
 
     CompTree{{cm_unique_suffix}} c_tree;
-    std::vector<float> syn_buffers;
+    std::size_t next_input_index;
     int self_spikes;
     int* GPU_self_spikes;
+    float* GPU_previous_soma_voltage;
     double time_resolution;
     double* GPU_time_resolution;
     double V_th;
   };
 
   void ensure_device_shared_buffers(HostNeuronState& state);
+  void ensure_runtime_layout_configured();
   void configure_runtime_layout_from_state(HostNeuronState& state);
-  void sync_compartment_recordables(HostNeuronState& state, int i_neuron);
+  void init_runtime_base_arrays(HostNeuronState& state, int i_neuron);
   void set_status(HostNeuronState& state, const nlohmann::json& statusdict);
   void add_compartment_(HostNeuronState& state, const nlohmann::json& dd);
   void add_receptor_(HostNeuronState& state, const nlohmann::json& dd);
@@ -304,7 +122,9 @@ class {{neuronName}} : public BaseNeuron
   std::vector<HostNeuronState> neurons_;
   std::vector<std::string> runtime_scal_var_names_;
   std::vector<std::string> runtime_scal_param_names_;
+  std::vector<std::string> runtime_port_var_names_;
   int runtime_compartment_count_ = 0;
+  int runtime_port_count_ = 0;
   bool runtime_layout_configured_ = false;
   bool runtime_arrays_allocated_ = false;
   float time_resolution_ = 0.1;

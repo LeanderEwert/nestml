@@ -69,7 +69,6 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
     _default_options["nest_gpu_path"] = None
     _default_options["register_neuron_model"] = True
     _default_options["skip_build"] = False
-    _default_options["gpu_compartment_recordables_count"] = 2
 
     def __init__(self, options: Optional[Mapping[str, Any]] = None):
         super().__init__(None)
@@ -131,7 +130,6 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
             "continuouscurrents": self.get_cm_syns_continuouscurrents_file_prefix(neuron),
         })
         namespace["cuda_printer"] = _CompartmentalCUDAPrinter(neuron, self._printer_no_origin)
-        namespace["gpu_compartment_recordables_count"] = int(self.get_option("gpu_compartment_recordables_count"))
         return namespace
 
     def generate_module_code(self, neurons: Sequence[ASTModel], metadata: Dict[str, Dict[str, Any]]) -> None:
@@ -192,7 +190,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
             include_files.append("\n#include \"" + model_name + ".h\"")
             code_blocks.append("\n"
                                f"else if (model_name == neuron_model_name[i_{model_name}_model]) {{\n"
-                               f"    n_ports = {len(neuron.get_spike_input_ports())};\n"
+                               "    n_ports = 0;\n"
                                f"    {model_name} *{model_name}_group = new {model_name};\n"
                                f"    node_vect_.push_back({model_name}_group);\n"
                                " }")

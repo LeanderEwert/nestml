@@ -59,7 +59,6 @@ along with NEST.  If not, see <http://www.gnu.org/licenses/>.
 // Includes from nestkernel:
 #include <stdexcept>
 
-#include <functional>
 #include <string>
 #include <vector>
 
@@ -67,11 +66,6 @@ along with NEST.  If not, see <http://www.gnu.org/licenses/>.
 
 class Compartment{{cm_unique_suffix}}
 {
-private:
-  // aggragators for numerical integration
-  double xx_;
-  double yy_;
-
 public:
   // compartment index
   long comp_index;
@@ -81,8 +75,6 @@ public:
   Compartment{{cm_unique_suffix}}* parent;
   std::vector< Compartment{{cm_unique_suffix}} > children;
 
-  // buffer for currents
-  std::vector<double> currents;
   // voltage variable
   double* v_comp;
   // electrical parameters
@@ -98,8 +90,6 @@ public:
   double* ff;
   double* gg;
   double hh;
-  // passage counter for recursion
-  int n_passed;
 
   // constructor, destructor
   Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index);
@@ -110,55 +100,8 @@ public:
   ~Compartment{{cm_unique_suffix}}(){};
 
   // initialization
-{%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
   void calibrate( double time_resolution );
-{%- else %}
-  void pre_run_hook( double time_resolution );
-{%- endif %}
-  // matrix construction
-  void construct_matrix_coupling_elements();
-
-  // maxtrix inversion
-  inline void gather_input( const std::pair< double, double >& in );
-  inline std::pair< double, double > io();
-  inline double calc_v( const double v_in );
 }; // Compartment
-
-/*
-Short helper functions for solving the matrix equation. Can hopefully be inlined
-*/
-inline void
-Compartment{{cm_unique_suffix}}::gather_input( const std::pair< double, double >& in )
-{
-  xx_ += in.first;
-  yy_ += in.second;
-}
-inline std::pair< double, double >
-Compartment{{cm_unique_suffix}}::io()
-{
-  // include inputs from child compartments
-  *gg -= xx_;
-  *ff -= yy_;
-
-  // output values
-  double g_val( hh * hh / *gg );
-  double f_val( *ff * hh / *gg );
-
-  return std::make_pair( g_val, f_val );
-}
-inline double
-Compartment{{cm_unique_suffix}}::calc_v( const double v_in )
-{
-  // reset recursion variables
-  xx_ = 0.0;
-  yy_ = 0.0;
-
-  // compute voltage
-  *v_comp = ( *ff - v_in * hh ) / *gg;
-
-  return *v_comp;
-}
-
 
 class CompTree{{cm_unique_suffix}}
 {
@@ -169,23 +112,16 @@ private:
   mutable Compartment{{cm_unique_suffix}} root_;
   std::vector< long > compartment_indices_;
   std::vector< Compartment{{cm_unique_suffix}}* > compartments_;
-  std::vector< Compartment{{cm_unique_suffix}}* > leafs_;
 
   long size_ = 0;
-
-  // recursion functions for matrix inversion
-  void solve_matrix_downsweep( Compartment{{cm_unique_suffix}}* compartment_ptr, std::vector< Compartment{{cm_unique_suffix}}* >::iterator leaf_it );
-  void solve_matrix_upsweep( Compartment{{cm_unique_suffix}}* compartment, double vv );
 
   // functions for pointer initialization
   void set_parents();
   void set_compartments();
   void set_compartment_variables();
-  void set_leafs();
 
   std::vector< double > v_comp_vec;
   std::vector< double > ca__div__dt_vec;
-  std::vector< double > gl__div__2_vec;
   std::vector< double > gl__times__el_vec;
   std::vector< double > gg0_vec;
   std::vector< double > gg_vec;
@@ -202,9 +138,6 @@ private:
   float* GPU_mech_g = nullptr;
   float* GPU_mech_i = nullptr;
   int* GPU_parent_index = nullptr;
-  int n_var_ = 0;
-  int i_neuron_ = 0;
-  int max_recordables_ = 0;
   bool base_arrays_initialized_ = false;
   bool device_tree_initialized_ = false;
 
@@ -219,17 +152,11 @@ public:
   void add_compartment( const long parent_index );
   void add_compartment( const long parent_index, const nlohmann::json& compartment_params );
   void add_compartment( Compartment{{cm_unique_suffix}}* compartment, const long parent_index );
-{%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
   void calibrate( double time_resolution );
-{%- else %}
-  void pre_run_hook( double time_resolution );
-{%- endif %}
 
   void init_pointers(int* global_self_spikes, double* global_time_resolution);
-  void init_base_arrays(float* var_arr, int n_var, int i_neuron, int base_index, int max_recordables);
-  void set_syn_buffers( std::vector< float >& syn_buffers );
+  void init_base_arrays(float* var_arr, int n_var, int i_neuron, int base_index);
   void sync_device_tree_from_host();
-  void sync_host_voltage_from_device();
   // get a compartment pointer from the tree
   Compartment{{cm_unique_suffix}}* get_compartment( const long compartment_index ) const;
   Compartment{{cm_unique_suffix}}* get_compartment( const long compartment_index, Compartment{{cm_unique_suffix}}* compartment, const long raise_flag ) const;
@@ -247,17 +174,13 @@ public:
     return size_;
   };
 
-  // get voltage values
-  std::vector< double > get_voltage() const;
-  double get_compartment_voltage( const long compartment_index );
-
+  // advance compartment tree, mechanisms, and soma spike flag by one timestep
+  void update( const long lag, float* port_input_arr, int port_input_port_step, double threshold, int* self_spikes, float* previous_soma_voltage );
   // construct the numerical integration matrix and vector
   void construct_matrix( const long lag, float* port_input_arr, int port_input_port_step );
   // solve the matrix equation for next timestep voltage
-  void solve_matrix();
+  void solve_matrix(double threshold, int* self_spikes, float* previous_soma_voltage);
 
-  // print function
-  void print_tree() const;
 }; // CompTree
 
 #endif /* #ifndef CM_TREE_{{cm_unique_suffix | upper }}_H */

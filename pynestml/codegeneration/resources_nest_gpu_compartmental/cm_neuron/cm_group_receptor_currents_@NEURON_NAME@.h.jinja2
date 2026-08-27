@@ -100,6 +100,8 @@ enum {{ receptor_name }}ParamIndexes
   N_{{ receptor_name }}_PARAM
 };
 
+struct {{receptor_name}}{{cm_unique_suffix}}Device;
+
 class {{receptor_name}}{{cm_unique_suffix}}{
 private:
   static constexpr int i_v_comp = i_{{ receptor_name }}_v_comp;
@@ -112,21 +114,21 @@ private:
   // global receptor index
   std::vector< long > rec_idx = {};
 
-  // propagators, initialized via pre_run_hook() or calibrate()
+  // propagators, initialized via calibrate()
   {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
   {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["propagators"].items()%}
   std::vector< double > {{state_variable_name}};
   {%- endfor %}
   {%- endfor %}
 
-  // kernel state variables, initialized via pre_run_hook() or calibrate()
+  // kernel state variables, initialized via calibrate()
   {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
   {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items()%}
   std::vector< double > {{state_variable_name}};
   {%- endfor %}
   {%- endfor %}
 
-  // user defined parameters, initialized via pre_run_hook() or calibrate()
+  // user defined parameters, initialized via calibrate()
   {%- for param_name, param_declaration in receptor_info["Parameters"].items() %}
   std::vector< double > {{param_name}};
   {%- endfor %}
@@ -145,13 +147,10 @@ private:
   std::vector< double > i_val = {};
   std::vector< double > d_i_tot_dv = {};
 
-  // user declared internals in order they were declared, initialized via pre_run_hook() or calibrate()
+  // user declared internals in order they were declared, initialized via calibrate()
   {%- for internal_name, internal_declaration in receptor_info["internals_used_declared"] %}
   std::vector< double > {{internal_name}};
   {%- endfor %}
-
-  // spike buffer
-  std::vector< float* > {{receptor_info["buffer_name"]}}_;
 
 //device variables
   float* GPU_{{receptor_name}}_vars = nullptr;
@@ -160,11 +159,7 @@ private:
   int* GPU_rec_idx = nullptr;
   int* GPU_self_spikes = nullptr;
   double* GPU_time_resolution = nullptr;
-  float* GPU_recordable_vars = nullptr;
-  int recordable_n_var = 0;
-  int recordable_i_neuron = 0;
-  int recordable_base_index = 0;
-  int recordable_max = 0;
+  int mechanism_stride = 0;
 
 //non specific variables
   float* GPU_v_comp;
@@ -201,10 +196,16 @@ private:
   float* GPU_{{internal_name}};
     {%- endfor %}
 
+  {{receptor_name}}{{cm_unique_suffix}}Device* device_ = nullptr;
+  bool device_dependencies_bound_ = false;
+  {{receptor_name}}{{cm_unique_suffix}}Device& device_view();
+  void clear_device_dependencies();
+  void bind_device_dependencies({% for ode in receptor_info["Dependencies"]["concentrations"] %}{% if not loop.first %}, {% endif %}float* dep_{{ode.lhs.name}}{% endfor %}{% if receptor_info["Dependencies"]["concentrations"] and (receptor_info["Dependencies"]["receptors"] or receptor_info["Dependencies"]["channels"] or receptor_info["Dependencies"]["continuous"]) %}, {% endif %}{% for inline in receptor_info["Dependencies"]["receptors"] %}{% if not loop.first %}, {% endif %}float* dep_{{inline.variable_name}}{% endfor %}{% if receptor_info["Dependencies"]["receptors"] and (receptor_info["Dependencies"]["channels"] or receptor_info["Dependencies"]["continuous"]) %}, {% endif %}{% for inline in receptor_info["Dependencies"]["channels"] %}{% if not loop.first %}, {% endif %}float* dep_{{inline.variable_name}}{% endfor %}{% if receptor_info["Dependencies"]["channels"] and receptor_info["Dependencies"]["continuous"] %}, {% endif %}{% for inline in receptor_info["Dependencies"]["continuous"] %}{% if not loop.first %}, {% endif %}float* dep_{{inline.variable_name}}{% endfor %});
+
 public:
   // constructor, destructor
   {{receptor_name}}{{cm_unique_suffix}}(){};
-  ~{{receptor_name}}{{cm_unique_suffix}}(){};
+  ~{{receptor_name}}{{cm_unique_suffix}}();
 
   void new_receptor(std::size_t comp_ass, const long rec_index);
   void new_receptor(std::size_t comp_ass, const long rec_index, const nlohmann::json& receptor_params);
@@ -213,23 +214,11 @@ public:
     GPU_self_spikes = global_self_spikes;
     GPU_time_resolution = global_time_resolution;
   }
-  void init_recordable_pointers(float* recordable_vars, int n_var, int i_neuron, int base_index, int max_recordables)
-  {
-    GPU_recordable_vars = recordable_vars;
-    recordable_n_var = n_var;
-    recordable_i_neuron = i_neuron;
-    recordable_base_index = base_index;
-    recordable_max = max_recordables;
-  }
-  void init_base_arrays(float* vars, float* params, int n_var, int n_param, int i_neuron, int var_base_index, int param_base_index, int max_recordables)
+  void init_base_arrays(float* vars, float* params, int n_var, int n_param, int i_neuron, int var_base_index, int param_base_index, int mechanism_count)
   {
     GPU_{{receptor_name}}_vars = vars == nullptr ? nullptr : vars + i_neuron * n_var + var_base_index;
     GPU_{{receptor_name}}_param = params == nullptr ? nullptr : params + i_neuron * n_param + param_base_index;
-    GPU_recordable_vars = vars;
-    recordable_n_var = n_var;
-    recordable_i_neuron = i_neuron;
-    recordable_base_index = var_base_index + max_recordables * i_g_val;
-    recordable_max = max_recordables;
+    mechanism_stride = mechanism_count;
   }
 
   //number of receptors
@@ -237,11 +226,6 @@ public:
 
   std::vector< size_t > compartment_association = {};
 
-  // numerical integration step
-  std::pair< std::vector< double >, std::vector< double > > f_numstep(std::vector< double > v_comp, const long lag {% for ode in receptor_info["Dependencies"]["concentrations"] %}, std::vector< double > {{ode.lhs.name}}{% endfor %}{% if receptor_info["Dependencies"]["receptors"]|length %}
-                        {% endif %}{% for inline in receptor_info["Dependencies"]["receptors"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if receptor_info["Dependencies"]["channels"]|length %}
-                        {% endif %}{% for inline in receptor_info["Dependencies"]["channels"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if receptor_info["Dependencies"]["continuous"]|length %}
-                        {% endif %}{% for inline in receptor_info["Dependencies"]["continuous"] %}, std::vector< double > {{inline.variable_name}}{% endfor %});
   void f_numstep_device(float* shared_v_comp, long lag, float* port_input_arr, int port_input_port_step{% for ode in receptor_info["Dependencies"]["concentrations"] %}, float* dep_{{ode.lhs.name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["receptors"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["channels"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["continuous"] %}, float* dep_{{inline.variable_name}}{% endfor %});
   void add_currents_to_device(float* compartment_g, float* compartment_i, int compartment_count) const;
   void add_total_current_to_device(float* compartment_current, int compartment_count) const;
@@ -250,92 +234,13 @@ public:
     void f_self_spike();
 
   // calibration
-{%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
   void calibrate(double time_resolution);
-{%- else %}
-  void pre_run_hook(double time_resolution);
-{%- endif %}
-  void set_buffer_ptr( std::vector< float >& rec_buffers )
-  {
-    for(std::size_t i = 0; i < rec_idx.size(); i++){
-        {{receptor_info["buffer_name"]}}_.push_back(&(rec_buffers[rec_idx[i]]));
-    }
-  };
-
   // function declarations
   {%- for function in receptor_info["Functions"] %}
   #pragma omp declare simd
     __attribute__((always_inline)) inline {{ function_declaration.FunctionDeclaration(function, pass_by_reference = true) -}};
 
   {% endfor %}
-
-    // root_inline getter
-    void get_currents_per_compartment(std::vector< double >& compartment_to_current);
-    void sync_recordables(float* var_arr, int n_var, int i_neuron, int base_index, int max_recordables) const
-    {
-      int recordable_offset = base_index;
-
-      {%- for variable_name, variable_info in receptor_info["States"].items() %}
-      for (std::size_t recs_id = 0; recs_id < neuron_{{ receptor_name }}_receptor_count; ++recs_id)
-      {
-        const std::size_t slot = recs_id;
-        if (slot < static_cast<std::size_t>(max_recordables))
-        {
-          const float recordable_value = {{variable_name}}.size() > recs_id ? static_cast<float>({{variable_name}}[recs_id]) : 0.0f;
-          cudaMemcpy(var_arr + i_neuron * n_var + recordable_offset + slot,
-                     &recordable_value,
-                     sizeof(float),
-                     cudaMemcpyHostToDevice);
-        }
-      }
-      recordable_offset += max_recordables;
-      {% endfor -%}
-
-      for (std::size_t recs_id = 0; recs_id < neuron_{{ receptor_name }}_receptor_count; ++recs_id)
-      {
-        const std::size_t slot = recs_id;
-        if (slot < static_cast<std::size_t>(max_recordables))
-        {
-          const float recordable_value = g_val.size() > recs_id ? static_cast<float>(g_val[recs_id]) : 0.0f;
-          cudaMemcpy(var_arr + i_neuron * n_var + recordable_offset + slot,
-                     &recordable_value,
-                     sizeof(float),
-                     cudaMemcpyHostToDevice);
-        }
-      }
-      recordable_offset += max_recordables;
-
-      for (std::size_t recs_id = 0; recs_id < neuron_{{ receptor_name }}_receptor_count; ++recs_id)
-      {
-        const std::size_t slot = recs_id;
-        if (slot < static_cast<std::size_t>(max_recordables))
-        {
-          const float recordable_value = i_tot_{{receptor_name}}.size() > recs_id ? static_cast<float>(i_tot_{{receptor_name}}[recs_id]) : 0.0f;
-          cudaMemcpy(var_arr + i_neuron * n_var + recordable_offset + slot,
-                     &recordable_value,
-                     sizeof(float),
-                     cudaMemcpyHostToDevice);
-        }
-      }
-    }
-
-    void debug_print_i_tot(const std::string& mechanism_name, const std::size_t neuron_index, const long lag) const
-    {
-      for (std::size_t recs_id = 0; recs_id < neuron_{{ receptor_name }}_receptor_count; ++recs_id)
-      {
-        float i_tot_value = 0.0f;
-        cudaMemcpy(&i_tot_value, GPU_i_tot_{{receptor_name}} + recs_id, sizeof(float), cudaMemcpyDeviceToHost);
-        std::cout << "[{{neuronName}} debug] neuron=" << neuron_index
-                  << " lag=" << lag
-                  << " mechanism=" << mechanism_name
-                  << " receptor_index=" << rec_idx[recs_id]
-                  << " compartment=" << compartment_association[recs_id]
-                  << " i_tot=" << i_tot_value
-                  << std::endl;
-      }
-    }
-
-    std::vector< double > distribute_shared_vector(std::vector< double > shared_vector);
 
 };
 

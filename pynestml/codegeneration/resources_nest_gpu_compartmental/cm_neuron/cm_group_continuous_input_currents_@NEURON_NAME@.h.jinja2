@@ -114,7 +114,6 @@ private:
 
   {%- for port_name, port_info in continuous_info["Continuous"].items() %}
   std::vector< double > {{ port_name }} = {};
-  std::vector< float* > {{ port_name }}_;
   {%- endfor %}
 
   {%- for param_name, param_declaration in continuous_info["Parameters"].items() %}
@@ -183,42 +182,17 @@ public:
     GPU_self_spikes = global_self_spikes;
     GPU_time_resolution = global_time_resolution;
   }
-  void init_recordable_pointers(float*, int, int, int, int)
+  void init_base_arrays(float*, float*, int, int, int, int, int, int)
   {
-  }
-  void init_base_arrays(float* var_arr, float*, int n_var, int, int i_neuron, int base_index, int, int max_recordables)
-  {
-    init_recordable_pointers(var_arr, n_var, i_neuron, base_index, max_recordables);
   }
 
   std::size_t neuron_{{ continuous_name }}_continuous_input_count = 0;
   std::vector< size_t > compartment_association = {};
 
-  std::pair< std::vector< double >, std::vector< double > > f_numstep(std::vector< double > v_comp, const long lag {% for ode in continuous_info["Dependencies"]["concentrations"] %}, std::vector< double > {{ode.lhs.name}}{% endfor %}{% if continuous_info["Dependencies"]["receptors"]|length %}
-                        {% endif %}{% for inline in continuous_info["Dependencies"]["receptors"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if continuous_info["Dependencies"]["channels"]|length %}
-                        {% endif %}{% for inline in continuous_info["Dependencies"]["channels"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if continuous_info["Dependencies"]["continuous"]|length %}
-                        {% endif %}{% for inline in continuous_info["Dependencies"]["continuous"] %}, std::vector< double > {{inline.variable_name}}{% endfor %});
-
   void f_update();
   void f_self_spike();
 
-{%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
   void calibrate(double time_resolution);
-{%- else %}
-  void pre_run_hook(double time_resolution);
-{%- endif %}
-
-  void set_buffer_ptr( std::vector< float >& continuous_buffers )
-  {
-    {% for port_name, port_info in continuous_info["Continuous"].items() %}
-    {{port_name}}_.clear();
-    {% endfor %}
-    for(std::size_t i = 0; i < continuous_idx.size(); i++){
-        {% for port_name, port_info in continuous_info["Continuous"].items() %}
-        {{port_name}}_.push_back(&(continuous_buffers[continuous_idx[i]]));
-        {% endfor %}
-    }
-  };
 
   {%- for function in continuous_info["Functions"] %}
   #pragma omp declare simd
@@ -226,56 +200,6 @@ public:
 
   {% endfor %}
 
-  void get_currents_per_compartment(std::vector< double >& compartment_to_current);
-  void sync_recordables(float* var_arr, int n_var, int i_neuron, int base_index, int max_recordables) const
-  {
-    int recordable_offset = base_index;
-
-    {%- for variable_name, variable_info in continuous_info["States"].items() %}
-    for (std::size_t cont_id = 0; cont_id < neuron_{{ continuous_name }}_continuous_input_count; ++cont_id)
-    {
-      const std::size_t compartment_index = compartment_association[cont_id];
-      if (compartment_index < static_cast<std::size_t>(max_recordables))
-      {
-        const float recordable_value = {{variable_name}}.size() > cont_id ? static_cast<float>({{variable_name}}[cont_id]) : 0.0f;
-        cudaMemcpy(var_arr + i_neuron * n_var + recordable_offset + compartment_index,
-                   &recordable_value,
-                   sizeof(float),
-                   cudaMemcpyHostToDevice);
-      }
-    }
-    recordable_offset += max_recordables;
-    {% endfor -%}
-
-    for (std::size_t cont_id = 0; cont_id < neuron_{{ continuous_name }}_continuous_input_count; ++cont_id)
-    {
-      const std::size_t compartment_index = compartment_association[cont_id];
-      if (compartment_index < static_cast<std::size_t>(max_recordables))
-      {
-        const float recordable_value = i_tot_{{continuous_name}}.size() > cont_id ? static_cast<float>(i_tot_{{continuous_name}}[cont_id]) : 0.0f;
-        cudaMemcpy(var_arr + i_neuron * n_var + recordable_offset + compartment_index,
-                   &recordable_value,
-                   sizeof(float),
-                   cudaMemcpyHostToDevice);
-      }
-    }
-  }
-
-  void debug_print_i_tot(const std::string& mechanism_name, const std::size_t neuron_index, const long lag) const
-  {
-    for (std::size_t cont_id = 0; cont_id < neuron_{{ continuous_name }}_continuous_input_count; ++cont_id)
-    {
-      std::cout << "[{{neuronName}} debug] neuron=" << neuron_index
-                << " lag=" << lag
-                << " mechanism=" << mechanism_name
-                << " continuous_index=" << continuous_idx[cont_id]
-                << " compartment=" << compartment_association[cont_id]
-                << " i_tot=" << i_tot_{{continuous_name}}[cont_id]
-                << std::endl;
-    }
-  }
-
-  std::vector< double > distribute_shared_vector(std::vector< double > shared_vector);
 };
 
 {% endfor %}

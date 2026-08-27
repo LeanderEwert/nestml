@@ -1,0 +1,672 @@
+/*
+ *  cm_tree.cpp
+ *
+ *  This file is part of NEST.
+ *
+ *  Copyright (C) 2004 The NEST Initiative
+ *
+ *  NEST is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  NEST is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with NEST.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+#include "{{neuronSpecificFileNamesCmSyns["tree"]}}.h"
+
+{%- set has_self_spike_processing = namespace(value=false) %}
+{%- for receptor_name, receptor_info in recs_info.items() %}
+  {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["SelfSpikesFunction"] and receptor_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
+    {%- set has_self_spike_processing.value = true %}
+  {%- endif %}
+  {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
+    {%- if convolution_info["spikes"]["name"] == "self_spikes" %}
+      {%- set has_self_spike_processing.value = true %}
+    {%- endif %}
+  {%- endfor %}
+{%- endfor %}
+{%- for channel_name, channel_info in chan_info.items() %}
+  {%- if channel_info["Blocks"] and channel_info["Blocks"]["SelfSpikesFunction"] and channel_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
+    {%- set has_self_spike_processing.value = true %}
+  {%- endif %}
+{%- endfor %}
+{%- for concentration_name, concentration_info in conc_info.items() %}
+  {%- if concentration_info["Blocks"] and concentration_info["Blocks"]["SelfSpikesFunction"] and concentration_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
+    {%- set has_self_spike_processing.value = true %}
+  {%- endif %}
+{%- endfor %}
+{%- for continuous_name, continuous_info in con_in_info.items() %}
+  {%- if continuous_info["Blocks"] and continuous_info["Blocks"]["SelfSpikesFunction"] and continuous_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
+    {%- set has_self_spike_processing.value = true %}
+  {%- endif %}
+{%- endfor %}
+
+namespace
+{
+__global__ void cm_tree_construct_matrix_kernel(float* v_comp,
+                                                const float* ca__div__dt,
+                                                const float* gl__times__el,
+                                                const float* gg0,
+                                                const float* gc,
+                                                const int* parent_index,
+                                                float* gg,
+                                                float* ff,
+                                                float* hh,
+                                                const float* mech_g,
+                                                const float* mech_i,
+                                                int n_comp)
+{
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n_comp)
+  {
+    return;
+  }
+
+  float g = gg0[i] + mech_g[i];
+  if (parent_index[i] >= 0)
+  {
+    g += gc[i];
+    hh[i] = -gc[i];
+  }
+  else
+  {
+    hh[i] = 0.0f;
+  }
+
+  for (int child = 0; child < n_comp; ++child)
+  {
+    if (parent_index[child] == i)
+    {
+      g += gc[child];
+    }
+  }
+
+  gg[i] = g;
+  ff[i] = ca__div__dt[i] * v_comp[i] + gl__times__el[i] + mech_i[i];
+}
+
+__global__ void cm_tree_solve_matrix_kernel(float* v_comp,
+                                            float* gg,
+                                            float* ff,
+                                            const float* hh,
+                                            const int* parent_index,
+                                            int n_comp,
+                                            float threshold,
+                                            int* self_spikes,
+                                            float* previous_soma_voltage)
+{
+  if (threadIdx.x != 0 || blockIdx.x != 0 || n_comp <= 0)
+  {
+    return;
+  }
+
+  const float previous_soma_voltage_value = v_comp[0];
+  if (self_spikes != nullptr)
+  {
+    self_spikes[0] = 0;
+  }
+  if (previous_soma_voltage != nullptr)
+  {
+    previous_soma_voltage[0] = previous_soma_voltage_value;
+  }
+
+  for (int i = n_comp - 1; i > 0; --i)
+  {
+    const int parent = parent_index[i];
+    if (parent >= 0)
+    {
+      const float g_val = hh[i] * hh[i] / gg[i];
+      const float f_val = ff[i] * hh[i] / gg[i];
+      gg[parent] -= g_val;
+      ff[parent] -= f_val;
+    }
+  }
+
+  v_comp[0] = ff[0] / gg[0];
+  for (int i = 1; i < n_comp; ++i)
+  {
+    const int parent = parent_index[i];
+    const float parent_v = parent >= 0 ? v_comp[parent] : 0.0f;
+    v_comp[i] = (ff[i] - parent_v * hh[i]) / gg[i];
+  }
+  if (self_spikes != nullptr)
+  {
+    self_spikes[0] = (v_comp[0] >= threshold && previous_soma_voltage_value < threshold) ? 1 : 0;
+  }
+}
+}
+
+Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index)
+  : comp_index( compartment_index )
+  , p_index( parent_index )
+  , parent( nullptr )
+  , v_comp( new double(0.0) )
+  , ca( 1.0 )
+  , gc( 0.01 )
+  , gl( 0.1 )
+  , el( -70. )
+  , gg0( nullptr )
+  , ca__div__dt( nullptr )
+  , gl__times__el( nullptr )
+  , ff( nullptr )
+  , gg( nullptr )
+  , hh( 0.0 )
+{
+  *v_comp = el;
+}
+
+Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index,
+    double* v_comp_ref, double* ca__div__dt_ref, double* gl__times__el_ref, double* gg0_ref, double* gg_ref, double* ff_ref )
+  : comp_index( compartment_index )
+  , p_index( parent_index )
+  , parent( nullptr )
+  , v_comp( v_comp_ref )
+  , ca( 1.0 )
+  , gc( 0.01 )
+  , gl( 0.1 )
+  , el( -70. )
+  , gg0( gg0_ref )
+  , ca__div__dt( ca__div__dt_ref )
+  , gl__times__el( gl__times__el_ref )
+  , ff( ff_ref )
+  , gg( gg_ref )
+  , hh( 0.0 )
+{
+  *v_comp = el;
+}
+Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const long compartment_index,
+  const long parent_index,
+  const nlohmann::json& compartment_params,
+  double* v_comp_ref, double* ca__div__dt_ref, double* gl__times__el_ref, double* gg0_ref, double* gg_ref, double* ff_ref)
+  : comp_index( compartment_index )
+  , p_index( parent_index )
+  , parent( nullptr )
+  , v_comp( v_comp_ref )
+  , ca( 1.0 )
+  , gc( 0.01 )
+  , gl( 0.1 )
+  , el( -70. )
+  , gg0( gg0_ref )
+  , ca__div__dt( ca__div__dt_ref )
+  , gl__times__el( gl__times__el_ref )
+  , ff( ff_ref )
+  , gg( gg_ref )
+  , hh( 0.0 )
+{
+
+  if (compartment_params.contains("C_m")) ca = compartment_params["C_m"];
+  if (compartment_params.contains("g_C")) gc = compartment_params["g_C"];
+  if (compartment_params.contains("g_L")) gl = compartment_params["g_L"];
+  if (compartment_params.contains("e_L")) el = compartment_params["e_L"];
+  double v_comp_update = el;
+  if (compartment_params.contains("v_comp")) v_comp_update = compartment_params["v_comp"];
+
+  *v_comp = v_comp_update;
+}
+
+void
+Compartment{{cm_unique_suffix}}::calibrate( double time_resolution )
+{
+
+  const double dt = time_resolution;
+  // used in vectorized passive loop
+  *ca__div__dt = ca / dt;
+  *gl__times__el = gl * el;
+  *gg0 = *ca__div__dt + gl;
+}
+
+CompTree{{cm_unique_suffix}}::CompTree{{cm_unique_suffix}}()
+  : root_( -1, -1 )
+  , size_( 0 )
+{
+  compartments_.resize( 0 );
+}
+
+/**
+ * Add a compartment to the tree structure via the python interface
+ * root shoud have -1 as parent index. Add root compartment first.
+ * Assumes parent of compartment is already added
+ */
+void
+CompTree{{cm_unique_suffix}}::add_compartment( const long parent_index )
+{
+  v_comp_vec.push_back(0.0);
+  ca__div__dt_vec.push_back(0.0);
+  gl__times__el_vec.push_back(0.0);
+  gg0_vec.push_back(0.0);
+  gg_vec.push_back(0.0);
+  ff_vec.push_back(0.0);
+  size_t comp_index = v_comp_vec.size()-1;
+
+  Compartment{{cm_unique_suffix}}* compartment = new Compartment{{cm_unique_suffix}}(
+    size_, parent_index, &(v_comp_vec[comp_index]), &(ca__div__dt_vec[comp_index]),
+    &(gl__times__el_vec[comp_index]), &(gg0_vec[comp_index]), &(gg_vec[comp_index]), &(ff_vec[comp_index])
+  );
+
+  neuron_currents.add_compartment();
+  add_compartment( compartment, parent_index );
+}
+
+void
+CompTree{{cm_unique_suffix}}::add_compartment( const long parent_index, const nlohmann::json& compartment_params )
+{
+  //Check whether all passed parameters exist within the used neuron model:
+  nlohmann::json comp_param_copy = compartment_params;
+
+  comp_param_copy.erase("C_m");
+  comp_param_copy.erase("g_C");
+  comp_param_copy.erase("g_L");
+  comp_param_copy.erase("e_L");
+  comp_param_copy.erase("v_comp");
+{%- for ion_channel_name, channel_info in chan_info.items() %}
+  {%- for variable_type, variable_info in channel_info["Parameters"].items() %}
+        {%- set variable = variable_info["ASTVariable"] %}
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
+  {%- endfor %}
+  {%- for variable_type, variable_info in channel_info["States"].items() %}
+        {%- set variable = variable_info["ASTVariable"] %}
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
+  {%- endfor %}
+  {%- for variable_type, variable_info in channel_info["ODEs"].items() %}
+  if( comp_param_copy.contains( "{{variable_type}}" ) ) comp_param_copy.erase("{{variable_type}}");
+  {%- endfor %}
+{%- endfor %}
+{%- for concentration_name, concentration_info in conc_info.items() %}
+  {%- for variable_type, variable_info in concentration_info["Parameters"].items() %}
+        {%- set variable = variable_info["ASTVariable"] %}
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
+  {%- endfor %}
+{%- endfor %}
+{%- for concentration_name, concentration_info in conc_info.items() %}
+  {%- for variable_type, variable_info in concentration_info["States"].items() %}
+        {%- set variable = variable_info["ASTVariable"] %}
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
+  {%- endfor %}
+  {%- for variable_type, variable_info in concentration_info["ODEs"].items() %}
+  if( comp_param_copy.contains( "{{variable_type}}" ) ) comp_param_copy.erase("{{variable_type}}");
+  {%- endfor %}
+{%- endfor %}
+{%- for receptor_name, receptor_info in recs_info.items() %}
+  {%- for variable_type, variable_info in receptor_info["Parameters"].items() %}
+        {%- set variable = variable_info["ASTVariable"] %}
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
+  {%- endfor %}
+{%- endfor %}
+{%- for receptor_name, receptor_info in recs_info.items() %}
+  {%- for variable_type, variable_info in receptor_info["States"].items() %}
+        {%- set variable = variable_info["ASTVariable"] %}
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
+  {%- endfor %}
+  {%- for variable_type, variable_info in receptor_info["ODEs"].items() %}
+  if( comp_param_copy.contains( "{{variable_type}}" ) ) comp_param_copy.erase("{{variable_type}}");
+  {%- endfor %}
+{%- endfor %}
+{%- for continuous_name, continuous_info in con_in_info.items() %}
+  {%- for variable_type, variable_info in continuous_info["Parameters"].items() %}
+        {%- set variable = variable_info["ASTVariable"] %}
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
+  {%- endfor %}
+  {%- for variable_type, variable_info in continuous_info["ODEs"].items() %}
+  if( comp_param_copy.contains( "{{variable_type}}" ) ) comp_param_copy.erase("{{variable_type}}");
+  {%- endfor %}
+{%- endfor %}
+{%- for continuous_name, continuous_info in con_in_info.items() %}
+  {%- for variable_type, variable_info in continuous_info["States"].items() %}
+        {%- set variable = variable_info["ASTVariable"] %}
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
+  {%- endfor %}
+{%- endfor %}
+//global vars
+  {%- for variable_type, variable_info in global_info["Parameters"].items() %}
+      {%- set variable = variable_info["ASTVariable"] %}
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
+  {%- endfor %}
+  {%- for variable_type, variable_info in global_info["ODEs"].items() %}
+  if( comp_param_copy.contains( "{{variable_type}}" ) ) comp_param_copy.erase("{{variable_type}}");
+  {%- endfor %}
+  {%- for variable_type, variable_info in global_info["States"].items() %}
+      {%- set variable = variable_info["ASTVariable"] %}
+  if( comp_param_copy.contains( "{{variable.name}}" ) ) comp_param_copy.erase("{{variable.name}}");
+  {%- endfor %}
+
+  if(!comp_param_copy.empty()){
+    std::string msg = "Following parameters are invalid: ";
+    for(auto& param : comp_param_copy.items()){
+        msg += param.key();
+        msg += "\n";
+    }
+    throw std::runtime_error(msg);
+  }
+
+  v_comp_vec.push_back(0.0);
+  ca__div__dt_vec.push_back(0.0);
+  gl__times__el_vec.push_back(0.0);
+  gg0_vec.push_back(0.0);
+  gg_vec.push_back(0.0);
+  ff_vec.push_back(0.0);
+  size_t comp_index = v_comp_vec.size()-1;
+
+  Compartment{{cm_unique_suffix}}* compartment = new Compartment{{cm_unique_suffix}}(
+    size_, parent_index, compartment_params, &(v_comp_vec[comp_index]), &(ca__div__dt_vec[comp_index]),
+    &(gl__times__el_vec[comp_index]), &(gg0_vec[comp_index]), &(gg_vec[comp_index]), &(ff_vec[comp_index])
+  );
+
+  neuron_currents.add_compartment(compartment_params);
+  add_compartment( compartment, parent_index );
+}
+
+void
+CompTree{{cm_unique_suffix}}::add_compartment( Compartment{{cm_unique_suffix}}* compartment, const long parent_index )
+{
+  size_++;
+
+  if ( parent_index >= 0 )
+  {
+    /**
+     * we do not raise an UnknownCompartment exception from within
+     * get_compartment(), because we want to print a more informative
+     * exception message
+     */
+    Compartment{{cm_unique_suffix}}* parent = get_compartment( parent_index, get_root(), 0 );
+    if ( parent == nullptr )
+    {
+      std::string msg = "does not exist in tree, but was specified as a parent compartment";
+      throw std::runtime_error(msg);
+    }
+
+    parent->children.push_back( *compartment );
+  }
+  else
+  {
+    // we raise an error if the root already exists
+    if ( root_.comp_index >= 0 )
+    {
+      std::string msg = ", the root, has already been instantiated";
+      throw std::runtime_error(msg);
+    }
+    root_ = *compartment;
+  }
+
+  compartment_indices_.push_back( compartment->comp_index );
+
+  set_compartments();
+}
+
+/**
+ * Get the compartment corresponding to the provided index in the tree.
+ *
+ * This function gets the compartments by a recursive search through the tree.
+ *
+ * The overloaded functions looks only in the subtree of the provided compartment,
+ * and also has the option to throw an error if no compartment corresponding to
+ * `compartment_index` is found in the tree
+ */
+Compartment{{cm_unique_suffix}}*
+CompTree{{cm_unique_suffix}}::get_compartment( const long compartment_index ) const
+{
+  return get_compartment( compartment_index, get_root(), 1 );
+}
+
+Compartment{{cm_unique_suffix}}*
+CompTree{{cm_unique_suffix}}::get_compartment( const long compartment_index, Compartment{{cm_unique_suffix}}* compartment, const long raise_flag ) const
+{
+  Compartment{{cm_unique_suffix}}* r_compartment = nullptr;
+
+  if ( compartment->comp_index == compartment_index )
+  {
+    r_compartment = compartment;
+  }
+  else
+  {
+    auto child_it = compartment->children.begin();
+    while ( ( not r_compartment ) && child_it != compartment->children.end() )
+    {
+      r_compartment = get_compartment( compartment_index, &( *child_it ), 0 );
+      ++child_it;
+    }
+  }
+
+  if ( ( not r_compartment ) && raise_flag )
+  {
+    std::string msg = "does not exist in tree";
+    throw std::runtime_error(msg);
+  }
+
+  return r_compartment;
+}
+
+/**
+ * Get the compartment corresponding to the provided index in the tree. Optimized
+ * trough the use of a pointer vector containing all compartments. Calling this
+ * function before CompTree{{cm_unique_suffix}}::init_pointers() is called will result in a segmentation
+ * fault
+ */
+Compartment{{cm_unique_suffix}}*
+CompTree{{cm_unique_suffix}}::get_compartment_opt( const long compartment_idx ) const
+{
+  return compartments_[ compartment_idx ];
+}
+
+/**
+ * Initialize all tree structure pointers
+ */
+void
+CompTree{{cm_unique_suffix}}::init_pointers(int* global_self_spikes, double* global_time_resolution)
+{
+  set_parents();
+  set_compartments();
+  set_compartment_variables();
+  neuron_currents.init_pointers(global_self_spikes, global_time_resolution);
+}
+
+void
+CompTree{{cm_unique_suffix}}::init_base_arrays(float* var_arr, int n_var, int i_neuron, int base_index)
+{
+  if (var_arr == nullptr)
+  {
+    throw std::runtime_error("Compartment tree requires initialized BaseNeuron var_arr_ storage");
+  }
+  GPU_v_comp = var_arr + i_neuron * n_var + base_index;
+  base_arrays_initialized_ = true;
+
+  for (long compartment_index = 0; compartment_index < size_; ++compartment_index)
+  {
+    const float v_comp = static_cast<float>(v_comp_vec[compartment_index]);
+    gpuErrchk(cudaMemcpy(GPU_v_comp + compartment_index, &v_comp, sizeof(float), cudaMemcpyHostToDevice));
+  }
+}
+
+void
+CompTree{{cm_unique_suffix}}::sync_device_tree_from_host()
+{
+  if (!base_arrays_initialized_)
+  {
+    throw std::runtime_error("Compartment tree device storage has not been initialized");
+  }
+
+  const std::size_t n_comp = static_cast<std::size_t>(size_);
+  if (n_comp == 0)
+  {
+    return;
+  }
+
+  if (!device_tree_initialized_)
+  {
+    gpuErrchk(cudaMalloc(&GPU_ca__div__dt, n_comp * sizeof(float)));
+    gpuErrchk(cudaMalloc(&GPU_gl__times__el, n_comp * sizeof(float)));
+    gpuErrchk(cudaMalloc(&GPU_gg0, n_comp * sizeof(float)));
+    gpuErrchk(cudaMalloc(&GPU_gg, n_comp * sizeof(float)));
+    gpuErrchk(cudaMalloc(&GPU_ff, n_comp * sizeof(float)));
+    gpuErrchk(cudaMalloc(&GPU_hh, n_comp * sizeof(float)));
+    gpuErrchk(cudaMalloc(&GPU_gc, n_comp * sizeof(float)));
+    gpuErrchk(cudaMalloc(&GPU_parent_index, n_comp * sizeof(int)));
+    gpuErrchk(cudaMalloc(&GPU_mech_g, n_comp * sizeof(float)));
+    gpuErrchk(cudaMalloc(&GPU_mech_i, n_comp * sizeof(float)));
+    device_tree_initialized_ = true;
+  }
+
+  std::vector<float> ca__div__dt_host(n_comp, 0.0f);
+  std::vector<float> gl__times__el_host(n_comp, 0.0f);
+  std::vector<float> gg0_host(n_comp, 0.0f);
+  std::vector<float> gc_host(n_comp, 0.0f);
+  std::vector<int> parent_index_host(n_comp, -1);
+  for (std::size_t i = 0; i < n_comp; ++i)
+  {
+    ca__div__dt_host[i] = static_cast<float>(ca__div__dt_vec[i]);
+    gl__times__el_host[i] = static_cast<float>(gl__times__el_vec[i]);
+    gg0_host[i] = static_cast<float>(gg0_vec[i]);
+    gc_host[i] = static_cast<float>(compartments_[i]->gc);
+    parent_index_host[i] = static_cast<int>(compartments_[i]->p_index);
+  }
+
+  gpuErrchk(cudaMemcpy(GPU_ca__div__dt, ca__div__dt_host.data(), n_comp * sizeof(float), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(GPU_gl__times__el, gl__times__el_host.data(), n_comp * sizeof(float), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(GPU_gg0, gg0_host.data(), n_comp * sizeof(float), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(GPU_gc, gc_host.data(), n_comp * sizeof(float), cudaMemcpyHostToDevice));
+  gpuErrchk(cudaMemcpy(GPU_parent_index, parent_index_host.data(), n_comp * sizeof(int), cudaMemcpyHostToDevice));
+}
+
+/**
+ * For each compartments, sets its pointer towards its parent compartment
+ */
+void
+CompTree{{cm_unique_suffix}}::set_parents()
+{
+  for ( auto compartment_idx_it = compartment_indices_.begin(); compartment_idx_it != compartment_indices_.end();
+        ++compartment_idx_it )
+  {
+    Compartment{{cm_unique_suffix}}* comp_ptr = get_compartment( *compartment_idx_it );
+    // will be nullptr if root
+    Compartment{{cm_unique_suffix}}* parent_ptr = get_compartment( comp_ptr->p_index, &root_, 0 );
+    comp_ptr->parent = parent_ptr;
+  }
+}
+
+/**
+ * Creates a vector of compartment pointers, organized in the order in which they were
+ * added by `add_compartment()`
+ */
+void
+CompTree{{cm_unique_suffix}}::set_compartments()
+{
+  compartments_.clear();
+
+  for ( auto compartment_idx_it = compartment_indices_.begin(); compartment_idx_it != compartment_indices_.end();
+        ++compartment_idx_it )
+  {
+    compartments_.push_back( get_compartment( *compartment_idx_it ) );
+  }
+}
+
+/**
+ * Set pointer variables within a compartment
+ */
+void
+CompTree{{cm_unique_suffix}}::set_compartment_variables()
+{
+  //reset compartment pointers due to unsafe pointers in vectors when resizing during compartment creation
+  for( size_t i = 0; i < v_comp_vec.size(); i++){
+    compartments_[i]->v_comp = &(v_comp_vec[i]);
+    compartments_[i]->ca__div__dt = &(ca__div__dt_vec[i]);
+    compartments_[i]->gl__times__el = &(gl__times__el_vec[i]);
+    compartments_[i]->gg0 = &(gg0_vec[i]);
+    compartments_[i]->gg = &(gg_vec[i]);
+    compartments_[i]->ff = &(ff_vec[i]);
+  }
+}
+
+/**
+ * Initialize state variables
+ */
+void
+CompTree{{cm_unique_suffix}}::calibrate( double time_resolution )
+{
+  if ( root_.comp_index < 0 )
+  {
+    std::string msg = "does not exist in tree, meaning that no compartments have been added";
+    throw std::runtime_error(msg);
+  }
+
+  // initialize the compartments
+  for ( auto compartment_it = compartments_.begin(); compartment_it != compartments_.end(); ++compartment_it )
+  {
+    ( *compartment_it )->calibrate( time_resolution );
+  }
+  sync_device_tree_from_host();
+  neuron_currents.ensure_device_shared_buffers(static_cast<int>(size_));
+  neuron_currents.calibrate( time_resolution );
+}
+
+void
+CompTree{{cm_unique_suffix}}::update( const long lag,
+                                      float* port_input_arr,
+                                      int port_input_port_step,
+                                      double threshold,
+                                              int* self_spikes,
+                                              float* previous_soma_voltage )
+{
+  construct_matrix(lag, port_input_arr, port_input_port_step);
+  solve_matrix(threshold, self_spikes, previous_soma_voltage);
+  {%- if has_self_spike_processing.value %}
+  neuron_currents.postsynaptic_synaptic_processing_device();
+  {%- endif %}
+}
+
+/**
+ * Construct the matrix equation to be solved to advance the model one timestep
+ */
+void
+CompTree{{cm_unique_suffix}}::construct_matrix( const long lag, float* port_input_arr, int port_input_port_step )
+{
+  if (!device_tree_initialized_)
+  {
+    throw std::runtime_error("Compartment tree device state has not been initialized before update");
+  }
+
+  neuron_currents.f_numstep_device(GPU_v_comp,
+                                   GPU_mech_g,
+                                   GPU_mech_i,
+                                   static_cast<int>(size_),
+                                   lag,
+                                   port_input_arr,
+                                   port_input_port_step);
+
+  const int block_size = 128;
+  const int grid_size = (static_cast<int>(size_) + block_size - 1) / block_size;
+  cm_tree_construct_matrix_kernel<<<grid_size, block_size>>>(GPU_v_comp,
+                                                             GPU_ca__div__dt,
+                                                             GPU_gl__times__el,
+                                                             GPU_gg0,
+                                                             GPU_gc,
+                                                             GPU_parent_index,
+                                                             GPU_gg,
+                                                             GPU_ff,
+                                                             GPU_hh,
+                                                             GPU_mech_g,
+                                                             GPU_mech_i,
+                                                             static_cast<int>(size_));
+}
+
+/**
+ * Solve matrix with O(n) algorithm
+ */
+void
+CompTree{{cm_unique_suffix}}::solve_matrix(double threshold, int* self_spikes, float* previous_soma_voltage)
+{
+  cm_tree_solve_matrix_kernel<<<1, 1>>>(GPU_v_comp,
+                                        GPU_gg,
+                                        GPU_ff,
+                                        GPU_hh,
+                                        GPU_parent_index,
+                                        static_cast<int>(size_),
+                                        static_cast<float>(threshold),
+                                        self_spikes,
+                                        previous_soma_voltage);
+}

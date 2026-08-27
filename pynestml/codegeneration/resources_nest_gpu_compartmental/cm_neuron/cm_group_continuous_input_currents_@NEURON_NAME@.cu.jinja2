@@ -126,11 +126,7 @@ void {{continuous_name}}{{cm_unique_suffix}}::new_continuous_input(std::size_t c
     {%- endfor %}
 }
 
-{%- if nest_version.startswith("v2") or nest_version.startswith("v3.1") or nest_version.startswith("v3.2") or nest_version.startswith("v3.3") %}
 void {{continuous_name}}{{cm_unique_suffix}}::calibrate(double time_resolution)
-{%- else %}
-void {{continuous_name}}{{cm_unique_suffix}}::pre_run_hook(double time_resolution)
-{%- endif %}
 {
   if (neuron_{{ continuous_name }}_continuous_input_count == 0)
   {
@@ -377,46 +373,6 @@ void {{continuous_name}}_device_self_spike_block({{continuous_name}}{{cm_unique_
   }
 }
 
-std::pair< std::vector< double >, std::vector< double > > {{continuous_name}}{{cm_unique_suffix}}::f_numstep(std::vector< double > v_comp, const long lag {% for ode in continuous_info["Dependencies"]["concentrations"] %}, std::vector< double > {{ode.lhs.name}}{% endfor %}{% if continuous_info["Dependencies"]["receptors"]|length %}
-                        {% endif %}{% for inline in continuous_info["Dependencies"]["receptors"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if continuous_info["Dependencies"]["channels"]|length %}
-                        {% endif %}{% for inline in continuous_info["Dependencies"]["channels"] %}, std::vector< double > {{inline.variable_name}}{% endfor %}{% if continuous_info["Dependencies"]["continuous"]|length %}
-                        {% endif %}{% for inline in continuous_info["Dependencies"]["continuous"] %}, std::vector< double > {{inline.variable_name}}{% endfor %})
-{
-  if (neuron_{{ continuous_name }}_continuous_input_count == 0)
-  {
-    return std::make_pair(g_val, i_val);
-  }
-
-  {%- for port_name, port_info in continuous_info["Continuous"].items() %}
-  for(std::size_t i = 0; i < neuron_{{ continuous_name }}_continuous_input_count; i++){
-      {{ port_name }}[i] = *{{ port_name }}_[i];
-  }
-  {%- endfor %}
-
-  cudaMemcpy(GPU_v_comp, v_comp.data(), neuron_{{continuous_name}}_continuous_input_count * sizeof(double), cudaMemcpyHostToDevice);
-  {%- for port_name, port_info in continuous_info["Continuous"].items() %}
-  cudaMemcpy(GPU_{{ port_name }}, {{ port_name }}.data(), neuron_{{continuous_name}}_continuous_input_count * sizeof(double), cudaMemcpyHostToDevice);
-  {%- endfor %}
-
-  const int threads_per_block = 256;
-  const int blocks = (neuron_{{continuous_name}}_continuous_input_count + threads_per_block - 1) / threads_per_block;
-  {{continuous_name}}{{cm_unique_suffix}}Device device{GPU_{{continuous_name}}_vars, GPU_{{continuous_name}}_param, GPU_self_spikes, GPU_time_resolution, neuron_{{continuous_name}}_continuous_input_count};
-  {{continuous_name}}_device_update<<<blocks, threads_per_block>>>(device);
-  cudaDeviceSynchronize();
-
-  cudaMemcpy(i_tot_{{continuous_name}}.data(), GPU_i_tot_{{continuous_name}}, neuron_{{continuous_name}}_continuous_input_count * sizeof(double), cudaMemcpyDeviceToHost);
-  cudaMemcpy(g_val.data(), GPU_g_val, neuron_{{continuous_name}}_continuous_input_count * sizeof(double), cudaMemcpyDeviceToHost);
-  cudaMemcpy(i_val.data(), GPU_i_val, neuron_{{continuous_name}}_continuous_input_count * sizeof(double), cudaMemcpyDeviceToHost);
-
-    {%- for variable_name, variable_info in continuous_info["States"].items() %}
-  cudaMemcpy({{ variable_name }}.data(), GPU_{{ variable_name }}, neuron_{{continuous_name}}_continuous_input_count * sizeof(double), cudaMemcpyDeviceToHost);
-    {%- endfor %}
-
-  f_update();
-
-  return std::make_pair(g_val, i_val);
-}
-
 void {{continuous_name}}{{cm_unique_suffix}}::f_update()
 {
   {%- if not (continuous_info["Blocks"] and continuous_info["Blocks"]["UpdateBlock"] and continuous_info["Blocks"]["UpdateBlock"].get_stmts_body().get_stmts()|length) %}
@@ -430,7 +386,6 @@ void {{continuous_name}}{{cm_unique_suffix}}::f_update()
   const int blocks = (neuron_{{continuous_name}}_continuous_input_count + threads_per_block - 1) / threads_per_block;
   {{continuous_name}}{{cm_unique_suffix}}Device device{GPU_{{continuous_name}}_vars, GPU_{{continuous_name}}_param, GPU_self_spikes, GPU_time_resolution, neuron_{{continuous_name}}_continuous_input_count};
   {{continuous_name}}_device_update_block<<<blocks, threads_per_block>>>(device);
-  cudaDeviceSynchronize();
   {%- endif %}
 }
 
@@ -447,7 +402,6 @@ void {{continuous_name}}{{cm_unique_suffix}}::f_self_spike()
   const int blocks = (neuron_{{continuous_name}}_continuous_input_count + threads_per_block - 1) / threads_per_block;
   {{continuous_name}}{{cm_unique_suffix}}Device device{GPU_{{continuous_name}}_vars, GPU_{{continuous_name}}_param, GPU_self_spikes, GPU_time_resolution, neuron_{{continuous_name}}_continuous_input_count};
   {{continuous_name}}_device_self_spike_block<<<blocks, threads_per_block>>>(device);
-  cudaDeviceSynchronize();
   {%- endif %}
 }
 
@@ -462,23 +416,6 @@ inline {{ function_declaration.FunctionDeclaration(function, ""~continuous_name~
 {%-   endfilter %}
 }
 {%- endfor %}
-
-void {{continuous_name}}{{cm_unique_suffix}}::get_currents_per_compartment(std::vector< double >& compartment_to_current){
-    for(std::size_t comp_id = 0; comp_id < compartment_to_current.size(); comp_id++){
-        compartment_to_current[comp_id] = 0;
-    }
-    for(std::size_t cont_id = 0; cont_id < neuron_{{ continuous_name }}_continuous_input_count; cont_id++){
-        compartment_to_current[this->compartment_association[cont_id]] += this->i_tot_{{continuous_name}}[cont_id];
-    }
-}
-
-std::vector< double > {{continuous_name}}{{cm_unique_suffix}}::distribute_shared_vector(std::vector< double > shared_vector){
-    std::vector< double > distributed_vector(this->neuron_{{ continuous_name }}_continuous_input_count, 0.0);
-    for(std::size_t cont_id = 0; cont_id < this->neuron_{{ continuous_name }}_continuous_input_count; cont_id++){
-        distributed_vector[cont_id] = shared_vector[compartment_association[cont_id]];
-    }
-    return distributed_vector;
-}
 
 // {{continuous_name}} continuous input end ///////////////////////////////////////////////////////////
 {%- endfor %}
