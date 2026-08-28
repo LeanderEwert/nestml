@@ -34,7 +34,6 @@ from pynestml.meta_model.ast_model import ASTModel
 from pynestml.meta_model.ast_simple_expression import ASTSimpleExpression
 from pynestml.utils.ast_global_information_collector import ASTGlobalInformationCollector
 from pynestml.utils.ast_utils import ASTUtils
-from pynestml.utils.ode_toolbox_utils import ODEToolboxUtils
 
 import odetoolbox
 

@@ -47,7 +47,6 @@ from pynestml.utils.ast_mechanism_information_collector import ASTMechanismInfor
 from pynestml.utils.ast_utils import ASTUtils
 from pynestml.utils.logger import Logger, LoggingLevel
 from pynestml.utils.messages import Messages
-from pynestml.utils.ode_toolbox_utils import ODEToolboxUtils
 
 import odetoolbox
 

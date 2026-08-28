@@ -30,7 +30,6 @@ from pynestml.utils.ast_utils import ASTUtils
 from pynestml.utils.logger import Logger, LoggingLevel
 from pynestml.utils.mechanism_processing import MechanismProcessing
 from pynestml.utils.messages import Messages
-from pynestml.utils.ode_toolbox_utils import ODEToolboxUtils
 
 import odetoolbox
 

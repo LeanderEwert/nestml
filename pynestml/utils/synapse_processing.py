@@ -37,7 +37,6 @@ from pynestml.meta_model.ast_simple_expression import ASTSimpleExpression
 from pynestml.utils.ast_synapse_information_collector import ASTSynapseInformationCollector, ASTKernelInformationCollectorVisitor
 from pynestml.utils.ast_utils import ASTUtils
 from pynestml.utils.logger import Logger, LoggingLevel
-from pynestml.utils.ode_toolbox_utils import ODEToolboxUtils
 from pynestml.utils.string_utils import removesuffix
 
 import odetoolbox
