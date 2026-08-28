@@ -35,7 +35,6 @@ import re
 from jinja2 import TemplateRuntimeError
 
 import odetoolbox
-from pynestml.utils.ode_toolbox_utils import ODEToolboxUtils
 
 import pynestml
 from pynestml.cocos.co_cos_manager import CoCosManager
@@ -472,16 +471,11 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
         odetoolbox_indict = self.create_ode_indict(
             neuron, parameters_block, kernel_buffers)
 
-        extra_kws = {}
-        if ODEToolboxUtils.is_ode_toolbox_v3_or_higher(odetoolbox):
-            extra_kws["disable_singularity_mitigation"] = True    # multiple conditional solvers returned from ODE-toolbox not yet supported by NESTML
-        else:
-            Logger.log_message(None, None, "Old version of ODE-toolbox used; consider upgrading. ``use_alternative_expM`` flags will be ignored.", None, LoggingLevel.WARNING)
-
         full_solver_result = odetoolbox.analysis(
             odetoolbox_indict,
             disable_stiffness_check=True,
             disable_singularity_detection=True,
+            disable_singularity_mitigation=True,
             preserve_expressions=self.get_option("preserve_expressions"),
             use_alternative_expM=self.get_option("use_alternative_expM"),
             log_level=FrontendConfiguration.logging_level,
@@ -528,16 +522,12 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
         if numeric_solvers:
             odetoolbox_indict = self.create_ode_indict(
                 neuron, parameters_block, kernel_buffers)
-            extra_kws = {}
-            if ODEToolboxUtils.is_ode_toolbox_v3_or_higher(odetoolbox):
-                extra_kws["disable_singularity_mitigation"] = True    # multiple conditional solvers returned from ODE-toolbox not yet supported by NESTML
-            else:
-                Logger.log_message(None, None, "Old version of ODE-toolbox used; consider upgrading. ``use_alternative_expM`` flags will be ignored.", None, LoggingLevel.WARNING)
 
             solver_result = odetoolbox.analysis(
                 odetoolbox_indict,
                 disable_stiffness_check=True,
                 disable_singularity_detection=True,
+                disable_singularity_mitigation=True,
                 use_alternative_expM=self.get_option("use_alternative_expM"),
                 disable_analytic_solver=True,
                 preserve_expressions=self.get_option("preserve_expressions"),

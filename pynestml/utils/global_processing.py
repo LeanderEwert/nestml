@@ -104,10 +104,7 @@ class GlobalProcessing:
     def collect_raw_odetoolbox_output(cls, syn_info):
         """calls ode-toolbox for each ode individually and collects the raw output"""
         for ode_variable_name, ode_info in syn_info["ODEs"].items():
-            if ODEToolboxUtils.is_ode_toolbox_v3_or_higher(odetoolbox):
-                solver_result = odetoolbox.analysis(ode_info["ode_toolbox_input"], disable_stiffness_check=True, disable_singularity_mitigation=True)    # multiple conditional solvers returned from ODE-toolbox not yet supported by NESTML
-            else:
-                solver_result = odetoolbox.analysis(ode_info["ode_toolbox_input"], disable_stiffness_check=True)
+            solver_result = odetoolbox.analysis(ode_info["ode_toolbox_input"], disable_stiffness_check=True, disable_singularity_mitigation=True)    # multiple conditional solvers returned from ODE-toolbox not yet supported by NESTML
             syn_info["ODEs"][ode_variable_name]["ode_toolbox_output"] = solver_result
 
         return syn_info

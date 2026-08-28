@@ -44,7 +44,7 @@ from pynestml.meta_model.ast_kernel import ASTKernel
 from pynestml.meta_model.ast_model import ASTModel
 from pynestml.transformers.transformer import Transformer
 from pynestml.utils.ast_utils import ASTUtils
-from pynestml.utils.logger import Logger
+from pynestml.utils.logger import Logger, LoggingLevel
 
 
 class ODEToolboxTransformer(Transformer):
@@ -135,12 +135,14 @@ class ODEToolboxTransformer(Transformer):
         else:
             # ODE-toolbox version prior to version 3
             Logger.log_message(None, None, "Old version of ODE-toolbox used; consider upgrading. ``disable_singularity_detection`` and ``use_alternative_expM`` flags will be ignored.", None, LoggingLevel.WARNING)
-            solver_result = odetoolbox.analysis(odetoolbox_indict,
-                                                disable_stiffness_check=True,
-                                                disable_analytic_solver=disable_analytic_solver,
-                                                disable_singularity_detection=self.get_option("disable_singularity_detection"),
-                                                preserve_expressions=self.get_option("preserve_expressions"),
-                                                log_level=FrontendConfiguration.logging_level)
+        solver_result = odetoolbox.analysis(odetoolbox_indict,
+                                            disable_stiffness_check=True,
+                                            disable_analytic_solver=disable_analytic_solver,
+                                            disable_singularity_detection=self.get_option("disable_singularity_detection"),
+                                            disable_singularity_mitigation=True,    # multiple conditional solvers returned from ODE-toolbox not yet supported by NESTML
+                                            use_alternative_expM=self.get_option("use_alternative_expM"),
+                                            preserve_expressions=self.get_option("preserve_expressions"),
+                                            log_level=FrontendConfiguration.logging_level)
 
         analytic_solver = None
         analytic_solvers = [x for x in solver_result if x["solver"] == "analytical"]
@@ -166,12 +168,14 @@ class ODEToolboxTransformer(Transformer):
                                                         log_level=FrontendConfiguration.logging_level)
                 else:
                     # ODE-toolbox version prior to version 3
-                    solver_result = odetoolbox.analysis(odetoolbox_indict,
-                                                        disable_stiffness_check=True,
-                                                        disable_analytic_solver=True,
-                                                        disable_singularity_detection=True,
-                                                        preserve_expressions=self.get_option("preserve_expressions"),
-                                                        log_level=FrontendConfiguration.logging_level)
+                solver_result = odetoolbox.analysis(odetoolbox_indict,
+                                                    disable_stiffness_check=True,
+                                                    disable_analytic_solver=True,
+                                                    disable_singularity_detection=True,
+                                                    disable_singularity_mitigation=True,    # multiple conditional solvers returned from ODE-toolbox not yet supported by NESTML
+                                                    use_alternative_expM=self.get_option("use_alternative_expM"),
+                                                    preserve_expressions=self.get_option("preserve_expressions"),
+                                                    log_level=FrontendConfiguration.logging_level)
             numeric_solvers = [x for x in solver_result if x["solver"].startswith("numeric")]
             assert len(numeric_solvers) <= 1, "More than one numeric solver not presently supported"
             if len(numeric_solvers) > 0:
