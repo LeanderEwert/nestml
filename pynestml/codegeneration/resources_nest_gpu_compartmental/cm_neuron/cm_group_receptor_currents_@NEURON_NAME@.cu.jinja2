@@ -289,21 +289,6 @@ void {{receptor_name}}{{cm_unique_suffix}}::calibrate(double time_resolution)
     throw std::runtime_error("{{receptor_name}} base parameter array was not initialized before calibrate()");
   }
 
-  //device side initialization
-  cudaMalloc(&GPU_compartment_association, neuron_{{receptor_name}}_receptor_count * sizeof(int));
-  cudaMalloc(&GPU_rec_idx, neuron_{{receptor_name}}_receptor_count * sizeof(int));
-
-  std::vector<int> compartment_association_int(compartment_association.begin(), compartment_association.end());
-  cudaMemcpy(GPU_compartment_association,
-             compartment_association_int.data(),
-             neuron_{{receptor_name}}_receptor_count * sizeof(int),
-             cudaMemcpyHostToDevice);
-  std::vector<int> rec_idx_int(rec_idx.begin(), rec_idx.end());
-  cudaMemcpy(GPU_rec_idx,
-             rec_idx_int.data(),
-             neuron_{{receptor_name}}_receptor_count * sizeof(int),
-             cudaMemcpyHostToDevice);
-
   GPU_v_comp = GPU_{{receptor_name}}_vars + mechanism_stride * i_v_comp;
 
   GPU_s_val =
@@ -413,11 +398,17 @@ struct {{receptor_name}}{{cm_unique_suffix}}Device
 
   float* y;
   float* param;
+  float* population_vars;
   int* compartment_association;
+  int* receptor_index;
   int* global_self_spikes;
   double* global_time_resolution;
   int mechanism_stride;
-  std::size_t neuron_{{receptor_name}}_receptor_count;
+  int population_n_var;
+  int population_n_param;
+  int population_compartment_count;
+  int population_voltage_base_index;
+  std::size_t total_mechanism_count;
   {%- for ode in receptor_info["Dependencies"]["concentrations"] %}
   float* dep_{{ode.lhs.name}};
   {%- endfor %}
@@ -466,13 +457,20 @@ struct {{receptor_name}}{{cm_unique_suffix}}Device
   __device__ __forceinline__
   void update(std::size_t i) const
   {
-      const int slot = static_cast<int>(i);
+      const int i_neuron = static_cast<int>(i) / mechanism_stride;
+      const int slot = static_cast<int>(i) % mechanism_stride;
       if (slot < 0 || slot >= mechanism_stride)
       {
         return;
       }
-      const double self_spikes = static_cast<double>(global_self_spikes[0]);
-      const int comp = compartment_association[slot];
+      float* y = this->y + i_neuron * population_n_var;
+      float* param = this->param == nullptr ? nullptr : this->param + i_neuron * population_n_param;
+      const double self_spikes = static_cast<double>(global_self_spikes[i_neuron]);
+      const int comp = compartment_association[i];
+      const int local_comp = comp - i_neuron * population_compartment_count;
+      const int voltage_index =
+        i_neuron * population_n_var + population_voltage_base_index + local_comp;
+      y[i_v_comp*mechanism_stride+slot] = population_vars[voltage_index];
       {%- for ode in receptor_info["Dependencies"]["concentrations"] %}
       const double {{ode.lhs.name}} = dep_{{ode.lhs.name}} == nullptr ? 0.0 : dep_{{ode.lhs.name}}[comp];
       {%- endfor %}
@@ -529,14 +527,17 @@ struct {{receptor_name}}{{cm_unique_suffix}}Device
   __device__ __forceinline__
   void update_block(std::size_t i) const
   {
-      const int slot = static_cast<int>(i);
+      const int i_neuron = static_cast<int>(i) / mechanism_stride;
+      const int slot = static_cast<int>(i) % mechanism_stride;
       if (slot < 0 || slot >= mechanism_stride)
       {
         return;
       }
-      const double self_spikes = static_cast<double>(global_self_spikes[0]);
+      float* y = this->y + i_neuron * population_n_var;
+      float* param = this->param == nullptr ? nullptr : this->param + i_neuron * population_n_param;
+      const double self_spikes = static_cast<double>(global_self_spikes[i_neuron]);
       double __resolution = global_time_resolution[0];
-      const int comp = compartment_association[slot];
+      const int comp = compartment_association[i];
       {%- for ode in receptor_info["Dependencies"]["concentrations"] %}
       const double {{ode.lhs.name}} = dep_{{ode.lhs.name}} == nullptr ? 0.0 : dep_{{ode.lhs.name}}[comp];
       {%- endfor %}
@@ -563,14 +564,17 @@ struct {{receptor_name}}{{cm_unique_suffix}}Device
   __device__ __forceinline__
   void self_spike_block(std::size_t i) const
   {
-      const int slot = static_cast<int>(i);
+      const int i_neuron = static_cast<int>(i) / mechanism_stride;
+      const int slot = static_cast<int>(i) % mechanism_stride;
       if (slot < 0 || slot >= mechanism_stride)
       {
         return;
       }
-      const double self_spikes = static_cast<double>(global_self_spikes[0]);
+      float* y = this->y + i_neuron * population_n_var;
+      float* param = this->param == nullptr ? nullptr : this->param + i_neuron * population_n_param;
+      const double self_spikes = static_cast<double>(global_self_spikes[i_neuron]);
       double __resolution = global_time_resolution[0];
-      const int comp = compartment_association[slot];
+      const int comp = compartment_association[i];
       {%- for ode in receptor_info["Dependencies"]["concentrations"] %}
       const double {{ode.lhs.name}} = dep_{{ode.lhs.name}} == nullptr ? 0.0 : dep_{{ode.lhs.name}}[comp];
       {%- endfor %}
@@ -610,11 +614,17 @@ struct {{receptor_name}}{{cm_unique_suffix}}Device
 
   device_->y = GPU_{{receptor_name}}_vars;
   device_->param = GPU_{{receptor_name}}_param;
+  device_->population_vars = GPU_population_vars;
   device_->compartment_association = GPU_compartment_association;
+  device_->receptor_index = GPU_rec_idx;
   device_->global_self_spikes = GPU_self_spikes;
   device_->global_time_resolution = GPU_time_resolution;
   device_->mechanism_stride = mechanism_stride;
-  device_->neuron_{{receptor_name}}_receptor_count = neuron_{{receptor_name}}_receptor_count;
+  device_->population_n_var = population_n_var;
+  device_->population_n_param = population_n_param;
+  device_->population_compartment_count = population_compartment_count;
+  device_->population_voltage_base_index = population_voltage_base_index;
+  device_->total_mechanism_count = population_neuron_count * neuron_{{receptor_name}}_receptor_count;
 
   if (!device_dependencies_bound_)
   {
@@ -666,22 +676,40 @@ void
 }
 
 __global__
-void {{receptor_name}}_device_update({{receptor_name}}{{cm_unique_suffix}}Device device)
+void {{receptor_name}}_device_update({{receptor_name}}{{cm_unique_suffix}}Device device,
+                                     float* port_input_arr,
+                                     int port_input_arr_step,
+                                     int port_input_port_step,
+                                     float* compartment_g,
+                                     float* compartment_i,
+                                     int total_compartment_count)
 {
   std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < device.neuron_{{receptor_name}}_receptor_count)
+  if (i < device.total_mechanism_count)
   {
+      const int i_neuron = static_cast<int>(i) / device.mechanism_stride;
+      const int slot = static_cast<int>(i) % device.mechanism_stride;
+      float* y = device.y + i_neuron * device.population_n_var;
+      float input_value = 0.0f;
+      if (port_input_arr != nullptr)
+      {
+        const int receptor = device.receptor_index[i];
+        if (receptor >= 0)
+        {
+          float* input = port_input_arr + i_neuron * port_input_arr_step + receptor * port_input_port_step;
+          input_value = *input;
+          *input = 0.0f;
+        }
+      }
+      y[device.i_s_val * device.mechanism_stride + slot] = input_value;
       device.update(i);
-  }
-}
-
-__global__
-void {{receptor_name}}_device_update_block({{receptor_name}}{{cm_unique_suffix}}Device device)
-{
-  std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < device.neuron_{{receptor_name}}_receptor_count)
-  {
       device.update_block(i);
+      const int compartment = device.compartment_association[i];
+      if (compartment >= 0 && compartment < total_compartment_count)
+      {
+        atomicAdd(compartment_g + compartment, y[device.i_g_val * device.mechanism_stride + slot]);
+        atomicAdd(compartment_i + compartment, y[device.i_i_val * device.mechanism_stride + slot]);
+      }
   }
 }
 
@@ -689,90 +717,81 @@ __global__
 void {{receptor_name}}_device_self_spike_block({{receptor_name}}{{cm_unique_suffix}}Device device)
 {
   std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < device.neuron_{{receptor_name}}_receptor_count && device.global_self_spikes[0])
+  if (i < device.total_mechanism_count
+      && device.global_self_spikes[i / device.mechanism_stride])
   {
       device.self_spike_block(i);
   }
 }
 
 __global__
-void {{receptor_name}}_copy_compartment_voltage_kernel(const float* shared_v_comp,
-                                                       const int* compartment_association,
-                                                       float* mechanism_v_comp,
-                                                       std::size_t mechanism_count)
-{
-  const std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < mechanism_count)
-  {
-    mechanism_v_comp[i] = shared_v_comp[compartment_association[i]];
-  }
-}
-
-__global__
-void {{receptor_name}}_aggregate_currents_kernel(const float* mechanism_g,
-                                                 const float* mechanism_i,
-                                                 const int* compartment_association,
-                                                 float* compartment_g,
-                                                 float* compartment_i,
-                                                 int compartment_count,
-                                                 std::size_t mechanism_count)
-{
-  const std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < mechanism_count)
-  {
-    const int compartment = compartment_association[i];
-    if (compartment >= 0 && compartment < compartment_count)
-    {
-      atomicAdd(compartment_g + compartment, mechanism_g[i]);
-      atomicAdd(compartment_i + compartment, mechanism_i[i]);
-    }
-  }
-}
-
-__global__
-void {{receptor_name}}_aggregate_total_current_kernel(const float* mechanism_current,
-                                                     const int* compartment_association,
+void {{receptor_name}}_aggregate_total_current_kernel({{receptor_name}}{{cm_unique_suffix}}Device device,
                                                      float* compartment_current,
-                                                     int compartment_count,
-                                                     std::size_t mechanism_count)
+                                                     int compartment_count)
 {
   const std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < mechanism_count)
+  if (i < device.total_mechanism_count)
   {
-    const int compartment = compartment_association[i];
+    const int i_neuron = static_cast<int>(i) / device.mechanism_stride;
+    const int slot = static_cast<int>(i) % device.mechanism_stride;
+    const float* y = device.y + i_neuron * device.population_n_var;
+    const int compartment = device.compartment_association[i];
     if (compartment >= 0 && compartment < compartment_count)
     {
-      atomicAdd(compartment_current + compartment, mechanism_current[i]);
+      atomicAdd(compartment_current + compartment,
+                y[i_i_tot_{{receptor_name}} * device.mechanism_stride + slot]);
     }
   }
 }
 
-__global__
-void {{receptor_name}}_route_spikes_kernel(float* port_input_arr,
-                                           int port_input_port_step,
-                                           const int* rec_idx,
-                                           float* s_val,
-                                           std::size_t receptor_count)
+void {{receptor_name}}{{cm_unique_suffix}}::configure_population(
+  float* var_arr,
+  float* param_arr,
+  int n_var,
+  int n_param,
+  int neuron_count,
+  int compartment_count,
+  int compartment_voltage_base_index,
+  int mechanism_count,
+  int mechanism_var_base_index,
+  int mechanism_param_base_index,
+  const std::vector<int>& global_compartment_association,
+  const std::vector<int>& receptor_indices,
+  int* global_self_spikes,
+  double* global_time_resolution)
 {
-  const std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < receptor_count)
+  population_neuron_count = neuron_count;
+  population_n_var = n_var;
+  population_n_param = n_param;
+  population_compartment_count = compartment_count;
+  population_voltage_base_index = compartment_voltage_base_index;
+  mechanism_stride = mechanism_count;
+  neuron_{{receptor_name}}_receptor_count = mechanism_count;
+  var_base_index = mechanism_var_base_index;
+  param_base_index = mechanism_param_base_index;
+  GPU_population_vars = var_arr;
+  GPU_{{receptor_name}}_vars = var_arr == nullptr ? nullptr : var_arr + var_base_index;
+  GPU_{{receptor_name}}_param = param_arr == nullptr ? nullptr : param_arr + param_base_index;
+  GPU_self_spikes = global_self_spikes;
+  GPU_time_resolution = global_time_resolution;
+
+  const std::size_t total_count = global_compartment_association.size();
+  if (total_count > 0)
   {
-    float input_value = 0.0f;
-    if (port_input_arr != nullptr)
-    {
-      const int port_index = rec_idx[i];
-      if (port_index >= 0)
-      {
-        float* input_ptr = port_input_arr + port_index * port_input_port_step;
-        input_value = *input_ptr;
-        *input_ptr = 0.0f;
-      }
-    }
-    s_val[i] = input_value;
+    cudaMalloc(&GPU_compartment_association, total_count * sizeof(int));
+    cudaMemcpy(GPU_compartment_association,
+               global_compartment_association.data(),
+               total_count * sizeof(int),
+               cudaMemcpyHostToDevice);
+    cudaMalloc(&GPU_rec_idx, total_count * sizeof(int));
+    cudaMemcpy(GPU_rec_idx,
+               receptor_indices.data(),
+               total_count * sizeof(int),
+               cudaMemcpyHostToDevice);
   }
 }
 
-void {{receptor_name}}{{cm_unique_suffix}}::f_numstep_device(float* shared_v_comp, long /*lag*/, float* port_input_arr, int port_input_port_step{% for ode in receptor_info["Dependencies"]["concentrations"] %}, float* dep_{{ode.lhs.name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["receptors"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["channels"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["continuous"] %}, float* dep_{{inline.variable_name}}{% endfor %})
+void {{receptor_name}}{{cm_unique_suffix}}::f_numstep_device(float* /*shared_v_comp*/, float* compartment_g, float* compartment_i, int total_compartment_count, long /*lag*/, float* port_input_arr, int port_input_arr_step, int port_input_port_step{% for ode in receptor_info["Dependencies"]["concentrations"] %}, float* dep_{{ode.lhs.name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["receptors"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["channels"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["continuous"] %}, float* dep_{{inline.variable_name}}{% endfor %}, cudaStream_t stream)
 {
   if (neuron_{{ receptor_name }}_receptor_count == 0)
   {
@@ -780,73 +799,36 @@ void {{receptor_name}}{{cm_unique_suffix}}::f_numstep_device(float* shared_v_com
   }
 
   const int threads_per_block = 256;
-  const int blocks = (neuron_{{receptor_name}}_receptor_count + threads_per_block - 1) / threads_per_block;
-  {{receptor_name}}_route_spikes_kernel<<<blocks, threads_per_block>>>(port_input_arr,
-                                                                       port_input_port_step,
-                                                                       GPU_rec_idx,
-                                                                       GPU_s_val,
-                                                                       neuron_{{receptor_name}}_receptor_count);
-  {{receptor_name}}_copy_compartment_voltage_kernel<<<blocks, threads_per_block>>>(shared_v_comp,
-                                                                                   GPU_compartment_association,
-                                                                                   GPU_v_comp,
-                                                                                   neuron_{{receptor_name}}_receptor_count);
+  const std::size_t total_count = population_neuron_count * neuron_{{receptor_name}}_receptor_count;
+  const int blocks = (total_count + threads_per_block - 1) / threads_per_block;
 
   bind_device_dependencies({% for ode in receptor_info["Dependencies"]["concentrations"] %}{% if not loop.first %}, {% endif %}dep_{{ode.lhs.name}}{% endfor %}{% if receptor_info["Dependencies"]["concentrations"] and (receptor_info["Dependencies"]["receptors"] or receptor_info["Dependencies"]["channels"] or receptor_info["Dependencies"]["continuous"]) %}, {% endif %}{% for inline in receptor_info["Dependencies"]["receptors"] %}{% if not loop.first %}, {% endif %}dep_{{inline.variable_name}}{% endfor %}{% if receptor_info["Dependencies"]["receptors"] and (receptor_info["Dependencies"]["channels"] or receptor_info["Dependencies"]["continuous"]) %}, {% endif %}{% for inline in receptor_info["Dependencies"]["channels"] %}{% if not loop.first %}, {% endif %}dep_{{inline.variable_name}}{% endfor %}{% if receptor_info["Dependencies"]["channels"] and receptor_info["Dependencies"]["continuous"] %}, {% endif %}{% for inline in receptor_info["Dependencies"]["continuous"] %}{% if not loop.first %}, {% endif %}dep_{{inline.variable_name}}{% endfor %});
   {{receptor_name}}{{cm_unique_suffix}}Device& device = device_view();
-  {{receptor_name}}_device_update<<<blocks, threads_per_block>>>(device);
-
-  f_update();
+  {{receptor_name}}_device_update<<<blocks, threads_per_block, 0, stream>>>(device,
+                                                                port_input_arr,
+                                                                port_input_arr_step,
+                                                                port_input_port_step,
+                                                                compartment_g,
+                                                                compartment_i,
+                                                                total_compartment_count);
 }
 
-void {{receptor_name}}{{cm_unique_suffix}}::add_currents_to_device(float* compartment_g, float* compartment_i, int compartment_count) const
+void {{receptor_name}}{{cm_unique_suffix}}::add_total_current_to_device(float* compartment_current, int compartment_count, cudaStream_t stream) const
 {
   if (neuron_{{ receptor_name }}_receptor_count == 0)
   {
     return;
   }
   const int threads_per_block = 256;
-  const int blocks = (neuron_{{receptor_name}}_receptor_count + threads_per_block - 1) / threads_per_block;
-  {{receptor_name}}_aggregate_currents_kernel<<<blocks, threads_per_block>>>(GPU_g_val,
-                                                                             GPU_i_val,
-                                                                             GPU_compartment_association,
-                                                                             compartment_g,
-                                                                             compartment_i,
-                                                                             compartment_count,
-                                                                             neuron_{{receptor_name}}_receptor_count);
+  const std::size_t total_count = population_neuron_count * neuron_{{receptor_name}}_receptor_count;
+  const int blocks = (total_count + threads_per_block - 1) / threads_per_block;
+  {{receptor_name}}{{cm_unique_suffix}}Device& device = const_cast<{{receptor_name}}{{cm_unique_suffix}}*>(this)->device_view();
+  {{receptor_name}}_aggregate_total_current_kernel<<<blocks, threads_per_block, 0, stream>>>(device,
+                                                                                compartment_current,
+                                                                                compartment_count);
 }
 
-void {{receptor_name}}{{cm_unique_suffix}}::add_total_current_to_device(float* compartment_current, int compartment_count) const
-{
-  if (neuron_{{ receptor_name }}_receptor_count == 0)
-  {
-    return;
-  }
-  const int threads_per_block = 256;
-  const int blocks = (neuron_{{receptor_name}}_receptor_count + threads_per_block - 1) / threads_per_block;
-  {{receptor_name}}_aggregate_total_current_kernel<<<blocks, threads_per_block>>>(GPU_i_tot_{{receptor_name}},
-                                                                                  GPU_compartment_association,
-                                                                                  compartment_current,
-                                                                                  compartment_count,
-                                                                                  neuron_{{receptor_name}}_receptor_count);
-}
-
-void {{receptor_name}}{{cm_unique_suffix}}::f_update()
-{
-  {%- if not (receptor_info["Blocks"] and receptor_info["Blocks"]["UpdateBlock"] and receptor_info["Blocks"]["UpdateBlock"].get_stmts_body().get_stmts()|length) %}
-  return;
-  {%- else %}
-  if (neuron_{{ receptor_name }}_receptor_count == 0)
-  {
-    return;
-  }
-  const int threads_per_block = 256;
-  const int blocks = (neuron_{{receptor_name}}_receptor_count + threads_per_block - 1) / threads_per_block;
-  {{receptor_name}}{{cm_unique_suffix}}Device& device = device_view();
-  {{receptor_name}}_device_update_block<<<blocks, threads_per_block>>>(device);
-  {%- endif %}
-}
-
-void {{receptor_name}}{{cm_unique_suffix}}::f_self_spike()
+void {{receptor_name}}{{cm_unique_suffix}}::f_self_spike(cudaStream_t stream)
 {
   {%- if not (receptor_info["Blocks"] and receptor_info["Blocks"]["SelfSpikesFunction"] and receptor_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length) %}
   return;
@@ -856,9 +838,10 @@ void {{receptor_name}}{{cm_unique_suffix}}::f_self_spike()
     return;
   }
   const int threads_per_block = 256;
-  const int blocks = (neuron_{{receptor_name}}_receptor_count + threads_per_block - 1) / threads_per_block;
+  const std::size_t total_count = population_neuron_count * neuron_{{receptor_name}}_receptor_count;
+  const int blocks = (total_count + threads_per_block - 1) / threads_per_block;
   {{receptor_name}}{{cm_unique_suffix}}Device& device = device_view();
-  {{receptor_name}}_device_self_spike_block<<<blocks, threads_per_block>>>(device);
+  {{receptor_name}}_device_self_spike_block<<<blocks, threads_per_block, 0, stream>>>(device);
   {%- endif %}
 }
 

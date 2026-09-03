@@ -29,58 +29,6 @@ Current manager for NEST GPU compartmental models.
 {%- set concentration_suffix = "_conc_" %}
 {%- set receptor_suffix = "_syn_" %}
 {%- set continuous_suffix = "_con_in_" %}
-{%- set has_device_dependencies = namespace(value=false) %}
-{%- for target_name, target_info in chan_info.items() %}
-  {%- if target_info["Dependencies"]["concentrations"] or target_info["Dependencies"]["receptors"] or target_info["Dependencies"]["channels"] or target_info["Dependencies"]["continuous"] %}
-    {%- set has_device_dependencies.value = true %}
-  {%- endif %}
-{%- endfor %}
-{%- for target_name, target_info in conc_info.items() %}
-  {%- if target_info["Dependencies"]["concentrations"] or target_info["Dependencies"]["receptors"] or target_info["Dependencies"]["channels"] or target_info["Dependencies"]["continuous"] %}
-    {%- set has_device_dependencies.value = true %}
-  {%- endif %}
-{%- endfor %}
-{%- for target_name, target_info in recs_info.items() %}
-  {%- if target_info["Dependencies"]["concentrations"] or target_info["Dependencies"]["receptors"] or target_info["Dependencies"]["channels"] or target_info["Dependencies"]["continuous"] %}
-    {%- set has_device_dependencies.value = true %}
-  {%- endif %}
-{%- endfor %}
-{%- for target_name, target_info in con_in_info.items() %}
-  {%- if target_info["Dependencies"]["concentrations"] or target_info["Dependencies"]["receptors"] or target_info["Dependencies"]["channels"] or target_info["Dependencies"]["continuous"] %}
-    {%- set has_device_dependencies.value = true %}
-  {%- endif %}
-{%- endfor %}
-{%- for synapse_name, synapse_info in syns_info.items() %}
-  {%- if synapse_info["Dependencies"]["concentrations"] or synapse_info["Dependencies"]["receptors"] or synapse_info["Dependencies"]["channels"] or synapse_info["Dependencies"]["continuous"] %}
-    {%- set has_device_dependencies.value = true %}
-  {%- endif %}
-{%- endfor %}
-{%- set has_self_spike_processing = namespace(value=false) %}
-{%- for receptor_name, receptor_info in recs_info.items() %}
-  {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["SelfSpikesFunction"] and receptor_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
-    {%- set has_self_spike_processing.value = true %}
-  {%- endif %}
-  {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
-    {%- if convolution_info["spikes"]["name"] == "self_spikes" %}
-      {%- set has_self_spike_processing.value = true %}
-    {%- endif %}
-  {%- endfor %}
-{%- endfor %}
-{%- for channel_name, channel_info in chan_info.items() %}
-  {%- if channel_info["Blocks"] and channel_info["Blocks"]["SelfSpikesFunction"] and channel_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
-    {%- set has_self_spike_processing.value = true %}
-  {%- endif %}
-{%- endfor %}
-{%- for concentration_name, concentration_info in conc_info.items() %}
-  {%- if concentration_info["Blocks"] and concentration_info["Blocks"]["SelfSpikesFunction"] and concentration_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
-    {%- set has_self_spike_processing.value = true %}
-  {%- endif %}
-{%- endfor %}
-{%- for continuous_name, continuous_info in con_in_info.items() %}
-  {%- if continuous_info["Blocks"] and continuous_info["Blocks"]["SelfSpikesFunction"] and continuous_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
-    {%- set has_self_spike_processing.value = true %}
-  {%- endif %}
-{%- endfor %}
 
 class GroupCurrents{{cm_unique_suffix}} {
 private:
@@ -161,6 +109,159 @@ public:
   GroupCurrents{{cm_unique_suffix}}(){};
   ~GroupCurrents{{cm_unique_suffix}}(){};
 
+  void initialize_population_runtime(const std::vector<GroupCurrents{{cm_unique_suffix}}*>& sources,
+                                     float* var_arr,
+                                     float* param_arr,
+                                     int n_var,
+                                     int n_param,
+                                     int neuron_count,
+                                     int compartment_count,
+                                     int compartment_voltage_base_index,
+                                     int* global_self_spikes,
+                                     double* global_time_resolution)
+  {
+    if (sources.empty())
+    {
+      throw std::runtime_error("Cannot initialize an empty compartmental population");
+    }
+
+    {%- for ion_channel_name, channel_info in chan_info.items() %}
+    {
+      const auto& layout_source = sources.front()->{{ion_channel_name}}{{channel_suffix}};
+      const int count = static_cast<int>(layout_source.neuron_{{ion_channel_name}}_channel_count);
+      std::vector<int> associations;
+      associations.reserve(neuron_count * count);
+      for (int i_neuron = 0; i_neuron < neuron_count; ++i_neuron)
+      {
+        const auto& local = sources[i_neuron]->{{ion_channel_name}}{{channel_suffix}}.compartment_association;
+        if (static_cast<int>(local.size()) != count)
+        {
+          throw std::runtime_error("All neurons in a compartmental GPU population must have the same {{ion_channel_name}} channel count");
+        }
+        for (const std::size_t local_compartment : local)
+        {
+          if (local_compartment >= static_cast<std::size_t>(compartment_count))
+          {
+            throw std::runtime_error("Channel compartment association is outside the owning neuron");
+          }
+          associations.push_back(i_neuron * compartment_count + static_cast<int>(local_compartment));
+        }
+      }
+      {{ion_channel_name}}{{channel_suffix}}.configure_population(
+        var_arr, param_arr, n_var, n_param, neuron_count, compartment_count,
+        compartment_voltage_base_index, count,
+        layout_source.get_var_base_index(),
+        layout_source.get_param_base_index(),
+        associations, global_self_spikes, global_time_resolution);
+    }
+    {% endfor -%}
+
+    {%- for concentration_name, concentration_info in conc_info.items() %}
+    {
+      const auto& layout_source = sources.front()->{{concentration_name}}{{concentration_suffix}};
+      const int count = static_cast<int>(layout_source.neuron_{{concentration_name}}_concentration_count);
+      std::vector<int> associations;
+      associations.reserve(neuron_count * count);
+      for (int i_neuron = 0; i_neuron < neuron_count; ++i_neuron)
+      {
+        const auto& local = sources[i_neuron]->{{concentration_name}}{{concentration_suffix}}.compartment_association;
+        if (static_cast<int>(local.size()) != count)
+        {
+          throw std::runtime_error("All neurons in a compartmental GPU population must have the same {{concentration_name}} concentration count");
+        }
+        for (const std::size_t local_compartment : local)
+        {
+          if (local_compartment >= static_cast<std::size_t>(compartment_count))
+          {
+            throw std::runtime_error("Concentration compartment association is outside the owning neuron");
+          }
+          associations.push_back(i_neuron * compartment_count + static_cast<int>(local_compartment));
+        }
+      }
+      {{concentration_name}}{{concentration_suffix}}.configure_population(
+        var_arr, param_arr, n_var, n_param, neuron_count, compartment_count,
+        compartment_voltage_base_index, count,
+        layout_source.get_var_base_index(),
+        layout_source.get_param_base_index(),
+        associations, global_self_spikes, global_time_resolution);
+    }
+    {% endfor -%}
+
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    {
+      const auto& layout_source = sources.front()->{{receptor_name}}{{receptor_suffix}};
+      const int count = static_cast<int>(layout_source.neuron_{{receptor_name}}_receptor_count);
+      std::vector<int> associations;
+      std::vector<int> receptor_indices;
+      associations.reserve(neuron_count * count);
+      receptor_indices.reserve(neuron_count * count);
+      for (int i_neuron = 0; i_neuron < neuron_count; ++i_neuron)
+      {
+        const auto& local = sources[i_neuron]->{{receptor_name}}{{receptor_suffix}}.compartment_association;
+        const auto& local_receptors = sources[i_neuron]->{{receptor_name}}{{receptor_suffix}}.get_receptor_indices();
+        if (static_cast<int>(local.size()) != count || static_cast<int>(local_receptors.size()) != count)
+        {
+          throw std::runtime_error("All neurons in a compartmental GPU population must have the same {{receptor_name}} receptor count");
+        }
+        for (int i = 0; i < count; ++i)
+        {
+          if (local[i] >= static_cast<std::size_t>(compartment_count))
+          {
+            throw std::runtime_error("Receptor compartment association is outside the owning neuron");
+          }
+          associations.push_back(i_neuron * compartment_count + static_cast<int>(local[i]));
+          receptor_indices.push_back(static_cast<int>(local_receptors[i]));
+        }
+      }
+      {{receptor_name}}{{receptor_suffix}}.configure_population(
+        var_arr, param_arr, n_var, n_param, neuron_count, compartment_count,
+        compartment_voltage_base_index, count,
+        layout_source.get_var_base_index(),
+        layout_source.get_param_base_index(),
+        associations, receptor_indices, global_self_spikes, global_time_resolution);
+    }
+    {% endfor -%}
+
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    {%- for synapse_name, synapse_info in syns_info.items() %}
+    {
+      const auto& layout_source = sources.front()->{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}};
+      const int count = static_cast<int>(layout_source.neuron_{{receptor_name}}_receptor_count);
+      std::vector<int> associations;
+      std::vector<int> receptor_indices;
+      associations.reserve(neuron_count * count);
+      receptor_indices.reserve(neuron_count * count);
+      for (int i_neuron = 0; i_neuron < neuron_count; ++i_neuron)
+      {
+        const auto& local = sources[i_neuron]->{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.compartment_association;
+        const auto& local_receptors = sources[i_neuron]->{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.get_receptor_indices();
+        if (static_cast<int>(local.size()) != count || static_cast<int>(local_receptors.size()) != count)
+        {
+          throw std::runtime_error("All neurons in a compartmental GPU population must have the same {{receptor_name}} receptor count");
+        }
+        for (int i = 0; i < count; ++i)
+        {
+          if (local[i] >= static_cast<std::size_t>(compartment_count))
+          {
+            throw std::runtime_error("Receptor compartment association is outside the owning neuron");
+          }
+          associations.push_back(i_neuron * compartment_count + static_cast<int>(local[i]));
+          receptor_indices.push_back(static_cast<int>(local_receptors[i]));
+        }
+      }
+      {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.configure_population(
+        var_arr, param_arr, n_var, n_param, neuron_count, compartment_count,
+        compartment_voltage_base_index, count,
+        layout_source.get_var_base_index(),
+        layout_source.get_param_base_index(),
+        associations, receptor_indices, global_self_spikes, global_time_resolution);
+    }
+    {% endfor -%}
+    {% endfor -%}
+
+    ensure_device_shared_buffers(neuron_count * compartment_count);
+  }
+
   void ensure_device_shared_buffers(int compartment_count)
   {
     if (compartment_count <= 0)
@@ -168,43 +269,7 @@ public:
       return;
     }
     {%- for ion_channel_name, channel_info in chan_info.items() %}
-    {%- set shared_current_used = namespace(value=false) %}
-    {%- for target_name, target_info in chan_info.items() %}
-      {%- for inline in target_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in conc_info.items() %}
-      {%- for inline in target_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in recs_info.items() %}
-      {%- for inline in target_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in con_in_info.items() %}
-      {%- for inline in target_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for synapse_name, synapse_info in syns_info.items() %}
-      {%- for inline in synapse_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- if shared_current_used.value %}
+    {%- if channel_info["requires_shared_current"] %}
     if (GPU_{{ion_channel_name}}{{channel_suffix}}_shared_current == nullptr)
     {
       cudaMalloc(&GPU_{{ion_channel_name}}{{channel_suffix}}_shared_current, compartment_count * sizeof(float));
@@ -213,43 +278,7 @@ public:
     {%- endif %}
     {% endfor -%}
     {%- for concentration_name, concentration_info in conc_info.items() %}
-    {%- set shared_concentration_used = namespace(value=false) %}
-    {%- for target_name, target_info in chan_info.items() %}
-      {%- for ode in target_info["Dependencies"]["concentrations"] %}
-        {%- if ode.lhs.name == concentration_name %}
-          {%- set shared_concentration_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in conc_info.items() %}
-      {%- for ode in target_info["Dependencies"]["concentrations"] %}
-        {%- if ode.lhs.name == concentration_name %}
-          {%- set shared_concentration_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in recs_info.items() %}
-      {%- for ode in target_info["Dependencies"]["concentrations"] %}
-        {%- if ode.lhs.name == concentration_name %}
-          {%- set shared_concentration_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in con_in_info.items() %}
-      {%- for ode in target_info["Dependencies"]["concentrations"] %}
-        {%- if ode.lhs.name == concentration_name %}
-          {%- set shared_concentration_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for synapse_name, synapse_info in syns_info.items() %}
-      {%- for ode in synapse_info["Dependencies"]["concentrations"] %}
-        {%- if ode.lhs.name == concentration_name %}
-          {%- set shared_concentration_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- if shared_concentration_used.value %}
+    {%- if concentration_info["requires_shared_concentration"] %}
     if (GPU_{{concentration_name}}{{concentration_suffix}}_shared_concentration == nullptr)
     {
       cudaMalloc(&GPU_{{concentration_name}}{{concentration_suffix}}_shared_concentration, compartment_count * sizeof(float));
@@ -258,43 +287,7 @@ public:
     {%- endif %}
     {% endfor -%}
     {%- for receptor_name, receptor_info in recs_info.items() %}
-    {%- set shared_current_used = namespace(value=false) %}
-    {%- for target_name, target_info in chan_info.items() %}
-      {%- for inline in target_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in conc_info.items() %}
-      {%- for inline in target_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in recs_info.items() %}
-      {%- for inline in target_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in con_in_info.items() %}
-      {%- for inline in target_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for synapse_name, synapse_info in syns_info.items() %}
-      {%- for inline in synapse_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- if shared_current_used.value %}
+    {%- if receptor_info["requires_shared_current"] %}
     if (GPU_{{receptor_name}}{{receptor_suffix}}_shared_current == nullptr)
     {
       cudaMalloc(&GPU_{{receptor_name}}{{receptor_suffix}}_shared_current, compartment_count * sizeof(float));
@@ -303,43 +296,7 @@ public:
     {%- endif %}
     {% endfor -%}
     {%- for receptor_name, receptor_info in recs_info.items() %}
-    {%- set shared_current_used = namespace(value=false) %}
-    {%- for target_name, target_info in chan_info.items() %}
-      {%- for inline in target_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in conc_info.items() %}
-      {%- for inline in target_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in recs_info.items() %}
-      {%- for inline in target_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in con_in_info.items() %}
-      {%- for inline in target_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for synapse_name, synapse_info in syns_info.items() %}
-      {%- for inline in synapse_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- if shared_current_used.value %}
+    {%- if receptor_info["requires_shared_current"] %}
     {%- for synapse_name, synapse_info in syns_info.items() %}
     if (GPU_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current == nullptr)
     {
@@ -350,43 +307,7 @@ public:
     {%- endif %}
     {% endfor -%}
     {%- for continuous_name, continuous_info in con_in_info.items() %}
-    {%- set shared_current_used = namespace(value=false) %}
-    {%- for target_name, target_info in chan_info.items() %}
-      {%- for inline in target_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in conc_info.items() %}
-      {%- for inline in target_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in recs_info.items() %}
-      {%- for inline in target_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in con_in_info.items() %}
-      {%- for inline in target_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for synapse_name, synapse_info in syns_info.items() %}
-      {%- for inline in synapse_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- if shared_current_used.value %}
+    {%- if continuous_info["requires_shared_current"] %}
     if (GPU_{{continuous_name}}{{continuous_suffix}}_shared_current == nullptr)
     {
       cudaMalloc(&GPU_{{continuous_name}}{{continuous_suffix}}_shared_current, compartment_count * sizeof(float));
@@ -396,204 +317,39 @@ public:
     {% endfor -%}
   }
 
-  void refresh_device_dependency_buffers(int compartment_count)
+  void refresh_device_dependency_buffers(int compartment_count, cudaStream_t stream)
   {
-    {%- if has_device_dependencies.value %}
+    {%- if has_mechanism_dependencies %}
     {%- for ion_channel_name, channel_info in chan_info.items() %}
-    {%- set shared_current_used = namespace(value=false) %}
-    {%- for target_name, target_info in chan_info.items() %}
-      {%- for inline in target_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in conc_info.items() %}
-      {%- for inline in target_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in recs_info.items() %}
-      {%- for inline in target_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in con_in_info.items() %}
-      {%- for inline in target_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for synapse_name, synapse_info in syns_info.items() %}
-      {%- for inline in synapse_info["Dependencies"]["channels"] %}
-        {%- if inline.variable_name == ion_channel_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- if shared_current_used.value %}
-    cudaMemset(GPU_{{ion_channel_name}}{{channel_suffix}}_shared_current, 0, compartment_count * sizeof(float));
-    {{ion_channel_name}}{{channel_suffix}}.add_total_current_to_device(GPU_{{ion_channel_name}}{{channel_suffix}}_shared_current, compartment_count);
+    {%- if channel_info["requires_shared_current"] %}
+    cudaMemsetAsync(GPU_{{ion_channel_name}}{{channel_suffix}}_shared_current, 0, compartment_count * sizeof(float), stream);
+    {{ion_channel_name}}{{channel_suffix}}.add_total_current_to_device(GPU_{{ion_channel_name}}{{channel_suffix}}_shared_current, compartment_count, stream);
     {%- endif %}
     {% endfor -%}
     {%- for concentration_name, concentration_info in conc_info.items() %}
-    {%- set shared_concentration_used = namespace(value=false) %}
-    {%- for target_name, target_info in chan_info.items() %}
-      {%- for ode in target_info["Dependencies"]["concentrations"] %}
-        {%- if ode.lhs.name == concentration_name %}
-          {%- set shared_concentration_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in conc_info.items() %}
-      {%- for ode in target_info["Dependencies"]["concentrations"] %}
-        {%- if ode.lhs.name == concentration_name %}
-          {%- set shared_concentration_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in recs_info.items() %}
-      {%- for ode in target_info["Dependencies"]["concentrations"] %}
-        {%- if ode.lhs.name == concentration_name %}
-          {%- set shared_concentration_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in con_in_info.items() %}
-      {%- for ode in target_info["Dependencies"]["concentrations"] %}
-        {%- if ode.lhs.name == concentration_name %}
-          {%- set shared_concentration_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for synapse_name, synapse_info in syns_info.items() %}
-      {%- for ode in synapse_info["Dependencies"]["concentrations"] %}
-        {%- if ode.lhs.name == concentration_name %}
-          {%- set shared_concentration_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- if shared_concentration_used.value %}
-    cudaMemset(GPU_{{concentration_name}}{{concentration_suffix}}_shared_concentration, 0, compartment_count * sizeof(float));
-    {{concentration_name}}{{concentration_suffix}}.add_concentrations_to_device(GPU_{{concentration_name}}{{concentration_suffix}}_shared_concentration, compartment_count);
+    {%- if concentration_info["requires_shared_concentration"] %}
+    cudaMemsetAsync(GPU_{{concentration_name}}{{concentration_suffix}}_shared_concentration, 0, compartment_count * sizeof(float), stream);
+    {{concentration_name}}{{concentration_suffix}}.add_concentrations_to_device(GPU_{{concentration_name}}{{concentration_suffix}}_shared_concentration, compartment_count, stream);
     {%- endif %}
     {% endfor -%}
     {%- for receptor_name, receptor_info in recs_info.items() %}
-    {%- set shared_current_used = namespace(value=false) %}
-    {%- for target_name, target_info in chan_info.items() %}
-      {%- for inline in target_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in conc_info.items() %}
-      {%- for inline in target_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in recs_info.items() %}
-      {%- for inline in target_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in con_in_info.items() %}
-      {%- for inline in target_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for synapse_name, synapse_info in syns_info.items() %}
-      {%- for inline in synapse_info["Dependencies"]["receptors"] %}
-        {%- if inline.variable_name == receptor_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- if shared_current_used.value %}
-    cudaMemset(GPU_{{receptor_name}}{{receptor_suffix}}_shared_current, 0, compartment_count * sizeof(float));
-    {{receptor_name}}{{receptor_suffix}}.add_total_current_to_device(GPU_{{receptor_name}}{{receptor_suffix}}_shared_current, compartment_count);
+    {%- if receptor_info["requires_shared_current"] %}
+    cudaMemsetAsync(GPU_{{receptor_name}}{{receptor_suffix}}_shared_current, 0, compartment_count * sizeof(float), stream);
+    {{receptor_name}}{{receptor_suffix}}.add_total_current_to_device(GPU_{{receptor_name}}{{receptor_suffix}}_shared_current, compartment_count, stream);
       {%- for synapse_name, synapse_info in syns_info.items() %}
-    cudaMemset(GPU_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current, 0, compartment_count * sizeof(float));
-    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.add_total_current_to_device(GPU_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current, compartment_count);
-    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.add_total_current_to_device(GPU_{{receptor_name}}{{receptor_suffix}}_shared_current, compartment_count);
+    cudaMemsetAsync(GPU_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current, 0, compartment_count * sizeof(float), stream);
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.add_total_current_to_device(GPU_{{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}_shared_current, compartment_count, stream);
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.add_total_current_to_device(GPU_{{receptor_name}}{{receptor_suffix}}_shared_current, compartment_count, stream);
       {% endfor -%}
     {%- endif %}
     {% endfor -%}
     {%- for continuous_name, continuous_info in con_in_info.items() %}
-    {%- set shared_current_used = namespace(value=false) %}
-    {%- for target_name, target_info in chan_info.items() %}
-      {%- for inline in target_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in conc_info.items() %}
-      {%- for inline in target_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in recs_info.items() %}
-      {%- for inline in target_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for target_name, target_info in con_in_info.items() %}
-      {%- for inline in target_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- for synapse_name, synapse_info in syns_info.items() %}
-      {%- for inline in synapse_info["Dependencies"]["continuous"] %}
-        {%- if inline.variable_name == continuous_name %}
-          {%- set shared_current_used.value = true %}
-        {%- endif %}
-      {%- endfor %}
-    {%- endfor %}
-    {%- if shared_current_used.value %}
-    cudaMemset(GPU_{{continuous_name}}{{continuous_suffix}}_shared_current, 0, compartment_count * sizeof(float));
+    {%- if continuous_info["requires_shared_current"] %}
+    cudaMemsetAsync(GPU_{{continuous_name}}{{continuous_suffix}}_shared_current, 0, compartment_count * sizeof(float), stream);
     {%- endif %}
     {% endfor -%}
     {%- endif %}
   }
-
-  void init_pointers(int* global_self_spikes, double* global_time_resolution)
-  {
-    {%- for ion_channel_name, channel_info in chan_info.items() %}
-    {{ion_channel_name}}{{channel_suffix}}.init_pointers(global_self_spikes, global_time_resolution);
-    {% endfor -%}
-    {%- for concentration_name, concentration_info in conc_info.items() %}
-    {{concentration_name}}{{concentration_suffix}}.init_pointers(global_self_spikes, global_time_resolution);
-    {% endfor -%}
-    {%- for receptor_name, receptor_info in recs_info.items() %}
-    {{receptor_name}}{{receptor_suffix}}.init_pointers(global_self_spikes, global_time_resolution);
-    {% endfor -%}
-    {%- for receptor_name, receptor_info in recs_info.items() %}
-    {%- for synapse_name, synapse_info in syns_info.items() %}
-    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.init_pointers(global_self_spikes, global_time_resolution);
-    {% endfor -%}
-    {% endfor -%}
-    {%- for continuous_name, continuous_info in con_in_info.items() %}
-    {{continuous_name}}{{continuous_suffix}}.init_pointers(global_self_spikes, global_time_resolution);
-    {% endfor -%}
-  };
 
   void init_base_arrays(float* var_arr, float* param_arr, int n_var, int n_param, int i_neuron, int base_var_index, int base_param_index)
   {
@@ -1106,30 +862,28 @@ public:
     {% endfor -%}
   };
 
-  void f_numstep_device(float* shared_v_comp, float* compartment_g, float* compartment_i, int compartment_count, const long lag, float* port_input_arr, int port_input_port_step)
+  void f_numstep_device(float* shared_v_comp, float* compartment_g, float* compartment_i, int compartment_count, const long lag, float* port_input_arr, int port_input_arr_step, int port_input_port_step, cudaStream_t stream = nullptr)
   {
     if (compartment_count <= 0)
     {
       return;
     }
-    cudaMemset(compartment_g, 0, compartment_count * sizeof(float));
-    cudaMemset(compartment_i, 0, compartment_count * sizeof(float));
-    {%- if has_device_dependencies.value %}
-    refresh_device_dependency_buffers(compartment_count);
+    cudaMemsetAsync(compartment_g, 0, compartment_count * sizeof(float), stream);
+    cudaMemsetAsync(compartment_i, 0, compartment_count * sizeof(float), stream);
+    {%- if has_mechanism_dependencies %}
+    refresh_device_dependency_buffers(compartment_count, stream);
     {%- endif %}
 
     {%- for concentration_name, concentration_info in conc_info.items() %}
-    {{ concentration_name }}{{concentration_suffix}}.f_numstep_device(shared_v_comp, lag{% for ode in concentration_info["Dependencies"]["concentrations"] %}, GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% for inline in concentration_info["Dependencies"]["receptors"] %}, GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% for inline in concentration_info["Dependencies"]["channels"] %}, GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% for inline in concentration_info["Dependencies"]["continuous"] %}, GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %});
+    {{ concentration_name }}{{concentration_suffix}}.f_numstep_device(shared_v_comp, lag{% for ode in concentration_info["Dependencies"]["concentrations"] %}, GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% for inline in concentration_info["Dependencies"]["receptors"] %}, GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% for inline in concentration_info["Dependencies"]["channels"] %}, GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% for inline in concentration_info["Dependencies"]["continuous"] %}, GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %}, stream);
     {% endfor -%}
 
     {%- for ion_channel_name, channel_info in chan_info.items() %}
-    {{ion_channel_name}}{{channel_suffix}}.f_numstep_device(shared_v_comp, lag{% for ode in channel_info["Dependencies"]["concentrations"] %}, GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% for inline in channel_info["Dependencies"]["receptors"] %}, GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% for inline in channel_info["Dependencies"]["channels"] %}, GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% for inline in channel_info["Dependencies"]["continuous"] %}, GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %});
-    {{ion_channel_name}}{{channel_suffix}}.add_currents_to_device(compartment_g, compartment_i, compartment_count);
+    {{ion_channel_name}}{{channel_suffix}}.f_numstep_device(shared_v_comp, compartment_g, compartment_i, compartment_count, lag{% for ode in channel_info["Dependencies"]["concentrations"] %}, GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% for inline in channel_info["Dependencies"]["receptors"] %}, GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% for inline in channel_info["Dependencies"]["channels"] %}, GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% for inline in channel_info["Dependencies"]["continuous"] %}, GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %}, stream);
     {% endfor -%}
 
     {%- for receptor_name, receptor_info in recs_info.items() %}
-    {{receptor_name}}{{receptor_suffix}}.f_numstep_device(shared_v_comp, lag, port_input_arr, port_input_port_step{% for ode in receptor_info["Dependencies"]["concentrations"] %}, GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% for inline in receptor_info["Dependencies"]["receptors"] %}, GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% for inline in receptor_info["Dependencies"]["channels"] %}, GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% for inline in receptor_info["Dependencies"]["continuous"] %}, GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %});
-    {{receptor_name}}{{receptor_suffix}}.add_currents_to_device(compartment_g, compartment_i, compartment_count);
+    {{receptor_name}}{{receptor_suffix}}.f_numstep_device(shared_v_comp, compartment_g, compartment_i, compartment_count, lag, port_input_arr, port_input_arr_step, port_input_port_step{% for ode in receptor_info["Dependencies"]["concentrations"] %}, GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% for inline in receptor_info["Dependencies"]["receptors"] %}, GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% for inline in receptor_info["Dependencies"]["channels"] %}, GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% for inline in receptor_info["Dependencies"]["continuous"] %}, GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %}, stream);
     {% endfor -%}
 
     {%- for receptor_name, receptor_info in recs_info.items() %}
@@ -1139,46 +893,36 @@ public:
     {%- set rec_dep = set(receptor_info["Dependencies"]["receptors"]).union(synapse_info["Dependencies"]["receptors"])%}
     {%- set chan_dep = set(receptor_info["Dependencies"]["channels"]).union(synapse_info["Dependencies"]["channels"])%}
     {%- set con_in_dep = set(receptor_info["Dependencies"]["continuous"]).union(synapse_info["Dependencies"]["continuous"])%}
-    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.f_numstep_device(shared_v_comp, lag, port_input_arr, port_input_port_step{% for ode in conc_dep %}, GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% for inline in rec_dep %}, GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% for inline in chan_dep %}, GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% for inline in con_in_dep %}, GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %});
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.f_numstep_device(shared_v_comp, compartment_g, compartment_i, compartment_count, lag, port_input_arr, port_input_arr_step, port_input_port_step{% for ode in conc_dep %}, GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% for inline in rec_dep %}, GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% for inline in chan_dep %}, GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% for inline in con_in_dep %}, GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %}, stream);
     {%- endwith %}
-    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.add_currents_to_device(compartment_g, compartment_i, compartment_count);
     {% endfor -%}
     {% endfor -%}
   };
 
-  void postsynaptic_synaptic_processing_device(){
-    {%- if has_self_spike_processing.value %}
+  void postsynaptic_synaptic_processing_device(cudaStream_t stream = nullptr){
+    {%- if has_self_spike_processing %}
     {%- for receptor_name, receptor_info in recs_info.items() %}
-    {%- set receptor_needs_self_spike = namespace(value=false) %}
-    {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["SelfSpikesFunction"] and receptor_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
-      {%- set receptor_needs_self_spike.value = true %}
-    {%- endif %}
-    {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
-      {%- if convolution_info["spikes"]["name"] == "self_spikes" %}
-        {%- set receptor_needs_self_spike.value = true %}
-      {%- endif %}
-    {%- endfor %}
-    {%- if receptor_needs_self_spike.value %}
+    {%- if receptor_info["has_self_spike_processing"] %}
         {%- for synapse_name, synapse_info in syns_info.items() %}
     {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.postsynaptic_synaptic_processing();
-    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.f_self_spike();
+    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.f_self_spike(stream);
         {% endfor -%}
-    {{receptor_name}}{{receptor_suffix}}.f_self_spike();
+    {{receptor_name}}{{receptor_suffix}}.f_self_spike(stream);
     {%- endif %}
     {% endfor -%}
     {%- for ion_channel_name, channel_info in chan_info.items() %}
-    {%- if channel_info["Blocks"] and channel_info["Blocks"]["SelfSpikesFunction"] and channel_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
-    {{ion_channel_name}}{{channel_suffix}}.f_self_spike();
+    {%- if channel_info["has_self_spike_processing"] %}
+    {{ion_channel_name}}{{channel_suffix}}.f_self_spike({% for ode in channel_info["Dependencies"]["concentrations"] %}{% if not loop.first %}, {% endif %}GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% if channel_info["Dependencies"]["concentrations"] and (channel_info["Dependencies"]["receptors"] or channel_info["Dependencies"]["channels"] or channel_info["Dependencies"]["continuous"]) %}, {% endif %}{% for inline in channel_info["Dependencies"]["receptors"] %}{% if not loop.first %}, {% endif %}GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% if channel_info["Dependencies"]["receptors"] and (channel_info["Dependencies"]["channels"] or channel_info["Dependencies"]["continuous"]) %}, {% endif %}{% for inline in channel_info["Dependencies"]["channels"] %}{% if not loop.first %}, {% endif %}GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% if channel_info["Dependencies"]["channels"] and channel_info["Dependencies"]["continuous"] %}, {% endif %}{% for inline in channel_info["Dependencies"]["continuous"] %}{% if not loop.first %}, {% endif %}GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %}{% if channel_info["Dependencies"]["concentrations"] or channel_info["Dependencies"]["receptors"] or channel_info["Dependencies"]["channels"] or channel_info["Dependencies"]["continuous"] %}, {% endif %}stream);
     {%- endif %}
     {% endfor -%}
     {%- for concentration_name, concentration_info in conc_info.items() %}
-    {%- if concentration_info["Blocks"] and concentration_info["Blocks"]["SelfSpikesFunction"] and concentration_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
-    {{concentration_name}}{{concentration_suffix}}.f_self_spike();
+    {%- if concentration_info["has_self_spike_processing"] %}
+    {{concentration_name}}{{concentration_suffix}}.f_self_spike({% for ode in concentration_info["Dependencies"]["concentrations"] %}{% if not loop.first %}, {% endif %}GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% if concentration_info["Dependencies"]["concentrations"] and (concentration_info["Dependencies"]["receptors"] or concentration_info["Dependencies"]["channels"] or concentration_info["Dependencies"]["continuous"]) %}, {% endif %}{% for inline in concentration_info["Dependencies"]["receptors"] %}{% if not loop.first %}, {% endif %}GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% if concentration_info["Dependencies"]["receptors"] and (concentration_info["Dependencies"]["channels"] or concentration_info["Dependencies"]["continuous"]) %}, {% endif %}{% for inline in concentration_info["Dependencies"]["channels"] %}{% if not loop.first %}, {% endif %}GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% if concentration_info["Dependencies"]["channels"] and concentration_info["Dependencies"]["continuous"] %}, {% endif %}{% for inline in concentration_info["Dependencies"]["continuous"] %}{% if not loop.first %}, {% endif %}GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %}{% if concentration_info["Dependencies"]["concentrations"] or concentration_info["Dependencies"]["receptors"] or concentration_info["Dependencies"]["channels"] or concentration_info["Dependencies"]["continuous"] %}, {% endif %}stream);
     {%- endif %}
     {% endfor -%}
     {%- for continuous_name, continuous_info in con_in_info.items() %}
-    {%- if continuous_info["Blocks"] and continuous_info["Blocks"]["SelfSpikesFunction"] and continuous_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
-    {{continuous_name}}{{continuous_suffix}}.f_self_spike();
+    {%- if continuous_info["has_self_spike_processing"] %}
+    {{continuous_name}}{{continuous_suffix}}.f_self_spike(stream);
     {%- endif %}
     {% endfor -%}
     {%- endif %}

@@ -373,7 +373,7 @@ void {{continuous_name}}_device_self_spike_block({{continuous_name}}{{cm_unique_
   }
 }
 
-void {{continuous_name}}{{cm_unique_suffix}}::f_update()
+void {{continuous_name}}{{cm_unique_suffix}}::f_update(cudaStream_t stream)
 {
   {%- if not (continuous_info["Blocks"] and continuous_info["Blocks"]["UpdateBlock"] and continuous_info["Blocks"]["UpdateBlock"].get_stmts_body().get_stmts()|length) %}
   return;
@@ -385,11 +385,11 @@ void {{continuous_name}}{{cm_unique_suffix}}::f_update()
   const int threads_per_block = 256;
   const int blocks = (neuron_{{continuous_name}}_continuous_input_count + threads_per_block - 1) / threads_per_block;
   {{continuous_name}}{{cm_unique_suffix}}Device device{GPU_{{continuous_name}}_vars, GPU_{{continuous_name}}_param, GPU_self_spikes, GPU_time_resolution, neuron_{{continuous_name}}_continuous_input_count};
-  {{continuous_name}}_device_update_block<<<blocks, threads_per_block>>>(device);
+  {{continuous_name}}_device_update_block<<<blocks, threads_per_block, 0, stream>>>(device);
   {%- endif %}
 }
 
-void {{continuous_name}}{{cm_unique_suffix}}::f_self_spike()
+void {{continuous_name}}{{cm_unique_suffix}}::f_self_spike(cudaStream_t stream)
 {
   {%- if not (continuous_info["Blocks"] and continuous_info["Blocks"]["SelfSpikesFunction"] and continuous_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length) %}
   return;
@@ -401,7 +401,7 @@ void {{continuous_name}}{{cm_unique_suffix}}::f_self_spike()
   const int threads_per_block = 256;
   const int blocks = (neuron_{{continuous_name}}_continuous_input_count + threads_per_block - 1) / threads_per_block;
   {{continuous_name}}{{cm_unique_suffix}}Device device{GPU_{{continuous_name}}_vars, GPU_{{continuous_name}}_param, GPU_self_spikes, GPU_time_resolution, neuron_{{continuous_name}}_continuous_input_count};
-  {{continuous_name}}_device_self_spike_block<<<blocks, threads_per_block>>>(device);
+  {{continuous_name}}_device_self_spike_block<<<blocks, threads_per_block, 0, stream>>>(device);
   {%- endif %}
 }
 

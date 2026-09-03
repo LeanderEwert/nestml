@@ -128,23 +128,54 @@ private:
   std::vector< double > ff_vec;
 
   float* GPU_v_comp = nullptr;
+  float* GPU_population_vars = nullptr;
   float* GPU_ca__div__dt = nullptr;
   float* GPU_gl__times__el = nullptr;
   float* GPU_gg0 = nullptr;
   float* GPU_gg = nullptr;
   float* GPU_ff = nullptr;
   float* GPU_hh = nullptr;
-  float* GPU_gc = nullptr;
   float* GPU_mech_g = nullptr;
   float* GPU_mech_i = nullptr;
   int* GPU_parent_index = nullptr;
   bool base_arrays_initialized_ = false;
   bool device_tree_initialized_ = false;
+  int population_neuron_count_ = 0;
+  int population_compartment_count_ = 0;
+  int population_n_var_ = 0;
+  int compartment_voltage_base_index_ = 0;
+  float* GPU_thresholds = nullptr;
+  int* GPU_population_self_spikes = nullptr;
+  double* GPU_population_time_resolution = nullptr;
+
+  cudaStream_t update_graph_capture_stream_ = nullptr;
+  cudaGraph_t update_graph_ = nullptr;
+  cudaGraphExec_t update_graph_exec_ = nullptr;
+  float* update_graph_port_input_arr_ = nullptr;
+  int update_graph_port_input_arr_step_ = 0;
+  int update_graph_port_input_port_step_ = 0;
+
+  bool update_profiling_enabled_ = false;
+  double profile_mechanisms_ms_ = 0.0;
+  double profile_matrix_construct_ms_ = 0.0;
+  double profile_matrix_solve_ms_ = 0.0;
+  double profile_self_spike_ms_ = 0.0;
+  double profile_update_ms_ = 0.0;
+  long profile_update_calls_ = 0;
+
+  void destroy_update_graph();
+  void enqueue_population_update(float* port_input_arr,
+                                 int port_input_arr_step,
+                                 int port_input_port_step,
+                                 cudaStream_t stream);
+  void capture_update_graph(float* port_input_arr,
+                            int port_input_arr_step,
+                            int port_input_port_step);
 
 public:
   // constructor, destructor
   CompTree{{cm_unique_suffix}}();
-  ~CompTree{{cm_unique_suffix}}(){};
+  ~CompTree{{cm_unique_suffix}}();
 
   GroupCurrents{{cm_unique_suffix}} neuron_currents;
 
@@ -153,10 +184,15 @@ public:
   void add_compartment( const long parent_index, const nlohmann::json& compartment_params );
   void add_compartment( Compartment{{cm_unique_suffix}}* compartment, const long parent_index );
   void calibrate( double time_resolution );
+  void initialize_population_runtime(const std::vector<CompTree{{cm_unique_suffix}}*>& trees,
+                                     float* var_arr,
+                                     float* param_arr,
+                                     int n_var,
+                                     int n_param,
+                                     const std::vector<float>& thresholds,
+                                     double time_resolution);
 
-  void init_pointers(int* global_self_spikes, double* global_time_resolution);
   void init_base_arrays(float* var_arr, int n_var, int i_neuron, int base_index);
-  void sync_device_tree_from_host();
   // get a compartment pointer from the tree
   Compartment{{cm_unique_suffix}}* get_compartment( const long compartment_index ) const;
   Compartment{{cm_unique_suffix}}* get_compartment( const long compartment_index, Compartment{{cm_unique_suffix}}* compartment, const long raise_flag ) const;
@@ -174,13 +210,18 @@ public:
     return size_;
   };
 
-  // advance compartment tree, mechanisms, and soma spike flag by one timestep
-  void update( const long lag, float* port_input_arr, int port_input_port_step, double threshold, int* self_spikes, float* previous_soma_voltage );
-  // construct the numerical integration matrix and vector
-  void construct_matrix( const long lag, float* port_input_arr, int port_input_port_step );
-  // solve the matrix equation for next timestep voltage
-  void solve_matrix(double threshold, int* self_spikes, float* previous_soma_voltage);
-
+  void update_population(const long lag,
+                         float* port_input_arr,
+                         int port_input_arr_step,
+                         int port_input_port_step);
+  void set_update_profiling_enabled( bool enabled );
+  void reset_update_profile();
+  void add_update_profile_to(double& mechanisms_ms,
+                             double& matrix_construct_ms,
+                             double& matrix_solve_ms,
+                             double& self_spike_ms,
+                             double& update_ms,
+                             long& update_calls) const;
 }; // CompTree
 
 #endif /* #ifndef CM_TREE_{{cm_unique_suffix | upper }}_H */

@@ -74,6 +74,7 @@ class {{neuronName}} : public BaseNeuron
 {
  public:
   {{neuronName}}() { receivesDict = true; }
+  ~{{neuronName}}();
 
   int Init(int i_node_0, int n_neuron, int n_port, int i_group);
 
@@ -91,26 +92,15 @@ class {{neuronName}} : public BaseNeuron
     HostNeuronState()
       : c_tree()
       , next_input_index(0)
-      , self_spikes(0)
-      , GPU_self_spikes(nullptr)
-      , GPU_previous_soma_voltage(nullptr)
-      , time_resolution(0.1)
-      , GPU_time_resolution(nullptr)
       , V_th(-55.0)
     {
     }
 
     CompTree{{cm_unique_suffix}} c_tree;
     std::size_t next_input_index;
-    int self_spikes;
-    int* GPU_self_spikes;
-    float* GPU_previous_soma_voltage;
-    double time_resolution;
-    double* GPU_time_resolution;
     double V_th;
   };
 
-  void ensure_device_shared_buffers(HostNeuronState& state);
   void ensure_runtime_layout_configured();
   void configure_runtime_layout_from_state(HostNeuronState& state);
   void init_runtime_base_arrays(HostNeuronState& state, int i_neuron);
@@ -120,6 +110,7 @@ class {{neuronName}} : public BaseNeuron
   void add_continuous_input_(HostNeuronState& state, const nlohmann::json& dd);
 
   std::vector<HostNeuronState> neurons_;
+  CompTree{{cm_unique_suffix}} population_tree_;
   std::vector<std::string> runtime_scal_var_names_;
   std::vector<std::string> runtime_scal_param_names_;
   std::vector<std::string> runtime_port_var_names_;
@@ -128,6 +119,13 @@ class {{neuronName}} : public BaseNeuron
   bool runtime_layout_configured_ = false;
   bool runtime_arrays_allocated_ = false;
   float time_resolution_ = 0.1;
+  bool profile_update_enabled_ = false;
+  double profile_mechanisms_ms_ = 0.0;
+  double profile_matrix_construct_ms_ = 0.0;
+  double profile_matrix_solve_ms_ = 0.0;
+  double profile_self_spike_ms_ = 0.0;
+  double profile_update_ms_ = 0.0;
+  long profile_update_calls_ = 0;
 };
 
 #endif

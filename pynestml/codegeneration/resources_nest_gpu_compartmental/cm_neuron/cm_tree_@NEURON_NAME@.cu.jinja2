@@ -21,104 +21,85 @@
  */
 #include "{{neuronSpecificFileNamesCmSyns["tree"]}}.h"
 
-{%- set has_self_spike_processing = namespace(value=false) %}
-{%- for receptor_name, receptor_info in recs_info.items() %}
-  {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["SelfSpikesFunction"] and receptor_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
-    {%- set has_self_spike_processing.value = true %}
-  {%- endif %}
-  {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
-    {%- if convolution_info["spikes"]["name"] == "self_spikes" %}
-      {%- set has_self_spike_processing.value = true %}
-    {%- endif %}
-  {%- endfor %}
-{%- endfor %}
-{%- for channel_name, channel_info in chan_info.items() %}
-  {%- if channel_info["Blocks"] and channel_info["Blocks"]["SelfSpikesFunction"] and channel_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
-    {%- set has_self_spike_processing.value = true %}
-  {%- endif %}
-{%- endfor %}
-{%- for concentration_name, concentration_info in conc_info.items() %}
-  {%- if concentration_info["Blocks"] and concentration_info["Blocks"]["SelfSpikesFunction"] and concentration_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
-    {%- set has_self_spike_processing.value = true %}
-  {%- endif %}
-{%- endfor %}
-{%- for continuous_name, continuous_info in con_in_info.items() %}
-  {%- if continuous_info["Blocks"] and continuous_info["Blocks"]["SelfSpikesFunction"] and continuous_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
-    {%- set has_self_spike_processing.value = true %}
-  {%- endif %}
-{%- endfor %}
-
 namespace
 {
-__global__ void cm_tree_construct_matrix_kernel(float* v_comp,
+float profile_elapsed_ms(cudaEvent_t start, cudaEvent_t stop)
+{
+  float elapsed_ms = 0.0f;
+  cudaEventElapsedTime(&elapsed_ms, start, stop);
+  return elapsed_ms;
+}
+
+__device__ __forceinline__ int
+neuron_index_from_global_compartment(int global_compartment, int compartments_per_neuron)
+{
+  return global_compartment / compartments_per_neuron;
+}
+
+__device__ __forceinline__ int
+local_compartment_index_from_global_compartment(int global_compartment, int compartments_per_neuron)
+{
+  return global_compartment % compartments_per_neuron;
+}
+
+__global__ void cm_tree_construct_matrix_kernel(float* population_vars,
+                                                int n_var,
+                                                int compartment_voltage_base_index,
                                                 const float* ca__div__dt,
                                                 const float* gl__times__el,
-                                                const float* gg0,
-                                                const float* gc,
-                                                const int* parent_index,
+                                                const float* matrix_diagonal,
                                                 float* gg,
                                                 float* ff,
-                                                float* hh,
                                                 const float* mech_g,
                                                 const float* mech_i,
-                                                int n_comp)
+                                                int compartment_count,
+                                                int total_compartment_count)
 {
-  const int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i >= n_comp)
+  const int global_compartment = blockIdx.x * blockDim.x + threadIdx.x;
+  if (global_compartment >= total_compartment_count)
   {
     return;
   }
 
-  float g = gg0[i] + mech_g[i];
-  if (parent_index[i] >= 0)
-  {
-    g += gc[i];
-    hh[i] = -gc[i];
-  }
-  else
-  {
-    hh[i] = 0.0f;
-  }
-
-  for (int child = 0; child < n_comp; ++child)
-  {
-    if (parent_index[child] == i)
-    {
-      g += gc[child];
-    }
-  }
-
-  gg[i] = g;
-  ff[i] = ca__div__dt[i] * v_comp[i] + gl__times__el[i] + mech_i[i];
+  const int i_neuron =
+    neuron_index_from_global_compartment(global_compartment, compartment_count);
+  const int local_compartment =
+    local_compartment_index_from_global_compartment(global_compartment, compartment_count);
+  const int voltage_index =
+    i_neuron * n_var + compartment_voltage_base_index + local_compartment;
+  const float voltage = population_vars[voltage_index];
+  gg[global_compartment] = matrix_diagonal[global_compartment] + mech_g[global_compartment];
+  ff[global_compartment] = ca__div__dt[global_compartment] * voltage
+    + gl__times__el[global_compartment] + mech_i[global_compartment];
 }
 
-__global__ void cm_tree_solve_matrix_kernel(float* v_comp,
+__global__ void cm_tree_solve_matrix_kernel(float* population_vars,
+                                            int n_var,
+                                            int compartment_voltage_base_index,
                                             float* gg,
                                             float* ff,
                                             const float* hh,
                                             const int* parent_index,
-                                            int n_comp,
-                                            float threshold,
-                                            int* self_spikes,
-                                            float* previous_soma_voltage)
+                                            int neuron_count,
+                                            int compartment_count,
+                                            const float* thresholds,
+                                            int* self_spikes)
 {
-  if (threadIdx.x != 0 || blockIdx.x != 0 || n_comp <= 0)
+  const int i_neuron = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i_neuron >= neuron_count || compartment_count <= 0)
   {
     return;
   }
 
-  const float previous_soma_voltage_value = v_comp[0];
-  if (self_spikes != nullptr)
-  {
-    self_spikes[0] = 0;
-  }
-  if (previous_soma_voltage != nullptr)
-  {
-    previous_soma_voltage[0] = previous_soma_voltage_value;
-  }
+  const int compartment_base = i_neuron * compartment_count;
+  float* compartment_voltages =
+    population_vars + i_neuron * n_var + compartment_voltage_base_index;
+  const float previous_soma_voltage_value = compartment_voltages[0];
+  self_spikes[i_neuron] = 0;
 
-  for (int i = n_comp - 1; i > 0; --i)
+  for (int local = compartment_count - 1; local > 0; --local)
   {
+    const int i = compartment_base + local;
     const int parent = parent_index[i];
     if (parent >= 0)
     {
@@ -129,17 +110,17 @@ __global__ void cm_tree_solve_matrix_kernel(float* v_comp,
     }
   }
 
-  v_comp[0] = ff[0] / gg[0];
-  for (int i = 1; i < n_comp; ++i)
+  compartment_voltages[0] = ff[compartment_base] / gg[compartment_base];
+  for (int local = 1; local < compartment_count; ++local)
   {
+    const int i = compartment_base + local;
     const int parent = parent_index[i];
-    const float parent_v = parent >= 0 ? v_comp[parent] : 0.0f;
-    v_comp[i] = (ff[i] - parent_v * hh[i]) / gg[i];
+    const int parent_local = parent - compartment_base;
+    const float parent_v = parent >= 0 ? compartment_voltages[parent_local] : 0.0f;
+    compartment_voltages[local] = (ff[i] - parent_v * hh[i]) / gg[i];
   }
-  if (self_spikes != nullptr)
-  {
-    self_spikes[0] = (v_comp[0] >= threshold && previous_soma_voltage_value < threshold) ? 1 : 0;
-  }
+  self_spikes[i_neuron] =
+    (compartment_voltages[0] >= thresholds[i_neuron] && previous_soma_voltage_value < thresholds[i_neuron]) ? 1 : 0;
 }
 }
 
@@ -227,6 +208,34 @@ CompTree{{cm_unique_suffix}}::CompTree{{cm_unique_suffix}}()
   , size_( 0 )
 {
   compartments_.resize( 0 );
+}
+
+CompTree{{cm_unique_suffix}}::~CompTree{{cm_unique_suffix}}()
+{
+  if (update_graph_exec_ != nullptr)
+  {
+    cudaStreamSynchronize(nullptr);
+  }
+  destroy_update_graph();
+  if (update_graph_capture_stream_ != nullptr)
+  {
+    cudaStreamDestroy(update_graph_capture_stream_);
+  }
+}
+
+void
+CompTree{{cm_unique_suffix}}::destroy_update_graph()
+{
+  if (update_graph_exec_ != nullptr)
+  {
+    cudaGraphExecDestroy(update_graph_exec_);
+    update_graph_exec_ = nullptr;
+  }
+  if (update_graph_ != nullptr)
+  {
+    cudaGraphDestroy(update_graph_);
+    update_graph_ = nullptr;
+  }
 }
 
 /**
@@ -445,25 +454,12 @@ CompTree{{cm_unique_suffix}}::get_compartment( const long compartment_index, Com
 /**
  * Get the compartment corresponding to the provided index in the tree. Optimized
  * trough the use of a pointer vector containing all compartments. Calling this
- * function before CompTree{{cm_unique_suffix}}::init_pointers() is called will result in a segmentation
- * fault
+ * function before calibration has finalized the compartment pointer vector is invalid.
  */
 Compartment{{cm_unique_suffix}}*
 CompTree{{cm_unique_suffix}}::get_compartment_opt( const long compartment_idx ) const
 {
   return compartments_[ compartment_idx ];
-}
-
-/**
- * Initialize all tree structure pointers
- */
-void
-CompTree{{cm_unique_suffix}}::init_pointers(int* global_self_spikes, double* global_time_resolution)
-{
-  set_parents();
-  set_compartments();
-  set_compartment_variables();
-  neuron_currents.init_pointers(global_self_spikes, global_time_resolution);
 }
 
 void
@@ -474,6 +470,7 @@ CompTree{{cm_unique_suffix}}::init_base_arrays(float* var_arr, int n_var, int i_
     throw std::runtime_error("Compartment tree requires initialized BaseNeuron var_arr_ storage");
   }
   GPU_v_comp = var_arr + i_neuron * n_var + base_index;
+  compartment_voltage_base_index_ = base_index;
   base_arrays_initialized_ = true;
 
   for (long compartment_index = 0; compartment_index < size_; ++compartment_index)
@@ -481,56 +478,6 @@ CompTree{{cm_unique_suffix}}::init_base_arrays(float* var_arr, int n_var, int i_
     const float v_comp = static_cast<float>(v_comp_vec[compartment_index]);
     gpuErrchk(cudaMemcpy(GPU_v_comp + compartment_index, &v_comp, sizeof(float), cudaMemcpyHostToDevice));
   }
-}
-
-void
-CompTree{{cm_unique_suffix}}::sync_device_tree_from_host()
-{
-  if (!base_arrays_initialized_)
-  {
-    throw std::runtime_error("Compartment tree device storage has not been initialized");
-  }
-
-  const std::size_t n_comp = static_cast<std::size_t>(size_);
-  if (n_comp == 0)
-  {
-    return;
-  }
-
-  if (!device_tree_initialized_)
-  {
-    gpuErrchk(cudaMalloc(&GPU_ca__div__dt, n_comp * sizeof(float)));
-    gpuErrchk(cudaMalloc(&GPU_gl__times__el, n_comp * sizeof(float)));
-    gpuErrchk(cudaMalloc(&GPU_gg0, n_comp * sizeof(float)));
-    gpuErrchk(cudaMalloc(&GPU_gg, n_comp * sizeof(float)));
-    gpuErrchk(cudaMalloc(&GPU_ff, n_comp * sizeof(float)));
-    gpuErrchk(cudaMalloc(&GPU_hh, n_comp * sizeof(float)));
-    gpuErrchk(cudaMalloc(&GPU_gc, n_comp * sizeof(float)));
-    gpuErrchk(cudaMalloc(&GPU_parent_index, n_comp * sizeof(int)));
-    gpuErrchk(cudaMalloc(&GPU_mech_g, n_comp * sizeof(float)));
-    gpuErrchk(cudaMalloc(&GPU_mech_i, n_comp * sizeof(float)));
-    device_tree_initialized_ = true;
-  }
-
-  std::vector<float> ca__div__dt_host(n_comp, 0.0f);
-  std::vector<float> gl__times__el_host(n_comp, 0.0f);
-  std::vector<float> gg0_host(n_comp, 0.0f);
-  std::vector<float> gc_host(n_comp, 0.0f);
-  std::vector<int> parent_index_host(n_comp, -1);
-  for (std::size_t i = 0; i < n_comp; ++i)
-  {
-    ca__div__dt_host[i] = static_cast<float>(ca__div__dt_vec[i]);
-    gl__times__el_host[i] = static_cast<float>(gl__times__el_vec[i]);
-    gg0_host[i] = static_cast<float>(gg0_vec[i]);
-    gc_host[i] = static_cast<float>(compartments_[i]->gc);
-    parent_index_host[i] = static_cast<int>(compartments_[i]->p_index);
-  }
-
-  gpuErrchk(cudaMemcpy(GPU_ca__div__dt, ca__div__dt_host.data(), n_comp * sizeof(float), cudaMemcpyHostToDevice));
-  gpuErrchk(cudaMemcpy(GPU_gl__times__el, gl__times__el_host.data(), n_comp * sizeof(float), cudaMemcpyHostToDevice));
-  gpuErrchk(cudaMemcpy(GPU_gg0, gg0_host.data(), n_comp * sizeof(float), cudaMemcpyHostToDevice));
-  gpuErrchk(cudaMemcpy(GPU_gc, gc_host.data(), n_comp * sizeof(float), cudaMemcpyHostToDevice));
-  gpuErrchk(cudaMemcpy(GPU_parent_index, parent_index_host.data(), n_comp * sizeof(int), cudaMemcpyHostToDevice));
 }
 
 /**
@@ -594,79 +541,353 @@ CompTree{{cm_unique_suffix}}::calibrate( double time_resolution )
     throw std::runtime_error(msg);
   }
 
-  // initialize the compartments
+  set_parents();
+  set_compartments();
+  set_compartment_variables();
+
+  // Initialize host construction data and the BaseNeuron-backed mechanism state.
   for ( auto compartment_it = compartments_.begin(); compartment_it != compartments_.end(); ++compartment_it )
   {
     ( *compartment_it )->calibrate( time_resolution );
   }
-  sync_device_tree_from_host();
-  neuron_currents.ensure_device_shared_buffers(static_cast<int>(size_));
   neuron_currents.calibrate( time_resolution );
 }
 
 void
-CompTree{{cm_unique_suffix}}::update( const long lag,
-                                      float* port_input_arr,
-                                      int port_input_port_step,
-                                      double threshold,
-                                              int* self_spikes,
-                                              float* previous_soma_voltage )
+CompTree{{cm_unique_suffix}}::initialize_population_runtime(
+  const std::vector<CompTree{{cm_unique_suffix}}*>& trees,
+  float* var_arr,
+  float* param_arr,
+  int n_var,
+  int n_param,
+  const std::vector<float>& thresholds,
+  double time_resolution)
 {
-  construct_matrix(lag, port_input_arr, port_input_port_step);
-  solve_matrix(threshold, self_spikes, previous_soma_voltage);
-  {%- if has_self_spike_processing.value %}
-  neuron_currents.postsynaptic_synaptic_processing_device();
+  destroy_update_graph();
+  if (trees.empty())
+  {
+    throw std::runtime_error("Cannot initialize an empty compartmental population");
+  }
+
+  population_neuron_count_ = static_cast<int>(trees.size());
+  population_compartment_count_ = static_cast<int>(trees.front()->size_);
+  population_n_var_ = n_var;
+  compartment_voltage_base_index_ = trees.front()->compartment_voltage_base_index_;
+  const int total_compartment_count = population_neuron_count_ * population_compartment_count_;
+
+  std::vector<float> ca__div__dt(total_compartment_count);
+  std::vector<float> gl__times__el(total_compartment_count);
+  std::vector<float> matrix_diagonal(total_compartment_count);
+  std::vector<float> hh(total_compartment_count);
+  std::vector<int> parent_index(total_compartment_count);
+  std::vector<GroupCurrents{{cm_unique_suffix}}*> current_groups;
+  current_groups.reserve(population_neuron_count_);
+
+  for (int i_neuron = 0; i_neuron < population_neuron_count_; ++i_neuron)
+  {
+    CompTree{{cm_unique_suffix}}& tree = *trees[i_neuron];
+    if (static_cast<int>(tree.size_) != population_compartment_count_)
+    {
+      throw std::runtime_error("All neurons in a compartmental GPU population must have the same compartment count");
+    }
+    if (tree.compartment_voltage_base_index_ != compartment_voltage_base_index_)
+    {
+      throw std::runtime_error("All neurons in a compartmental GPU population must use the same compartment voltage base index");
+    }
+    current_groups.push_back(&tree.neuron_currents);
+    const int compartment_base = i_neuron * population_compartment_count_;
+    for (int local = 0; local < population_compartment_count_; ++local)
+    {
+      const int global = compartment_base + local;
+      const Compartment{{cm_unique_suffix}}& compartment = *tree.compartments_[local];
+      ca__div__dt[global] = static_cast<float>(tree.ca__div__dt_vec[local]);
+      gl__times__el[global] = static_cast<float>(tree.gl__times__el_vec[local]);
+
+      double diagonal = tree.gg0_vec[local];
+      if (compartment.p_index >= 0)
+      {
+        diagonal += compartment.gc;
+        hh[global] = static_cast<float>(-compartment.gc);
+        parent_index[global] = compartment_base + static_cast<int>(compartment.p_index);
+      }
+      else
+      {
+        hh[global] = 0.0f;
+        parent_index[global] = -1;
+      }
+      for (int child = 0; child < population_compartment_count_; ++child)
+      {
+        if (tree.compartments_[child]->p_index == local)
+        {
+          diagonal += tree.compartments_[child]->gc;
+        }
+      }
+      matrix_diagonal[global] = static_cast<float>(diagonal);
+    }
+  }
+
+  GPU_population_vars = var_arr;
+  cudaMalloc(&GPU_ca__div__dt, total_compartment_count * sizeof(float));
+  cudaMalloc(&GPU_gl__times__el, total_compartment_count * sizeof(float));
+  cudaMalloc(&GPU_gg0, total_compartment_count * sizeof(float));
+  cudaMalloc(&GPU_hh, total_compartment_count * sizeof(float));
+  cudaMalloc(&GPU_parent_index, total_compartment_count * sizeof(int));
+  cudaMalloc(&GPU_gg, total_compartment_count * sizeof(float));
+  cudaMalloc(&GPU_ff, total_compartment_count * sizeof(float));
+  cudaMalloc(&GPU_mech_g, total_compartment_count * sizeof(float));
+  cudaMalloc(&GPU_mech_i, total_compartment_count * sizeof(float));
+  cudaMalloc(&GPU_thresholds, population_neuron_count_ * sizeof(float));
+  cudaMalloc(&GPU_population_self_spikes, population_neuron_count_ * sizeof(int));
+  cudaMalloc(&GPU_population_time_resolution, sizeof(double));
+
+  cudaMemcpy(GPU_ca__div__dt, ca__div__dt.data(), total_compartment_count * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpy(GPU_gl__times__el, gl__times__el.data(), total_compartment_count * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpy(GPU_gg0, matrix_diagonal.data(), total_compartment_count * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpy(GPU_hh, hh.data(), total_compartment_count * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemcpy(GPU_parent_index, parent_index.data(), total_compartment_count * sizeof(int), cudaMemcpyHostToDevice);
+  cudaMemcpy(GPU_thresholds, thresholds.data(), population_neuron_count_ * sizeof(float), cudaMemcpyHostToDevice);
+  cudaMemset(GPU_gg, 0, total_compartment_count * sizeof(float));
+  cudaMemset(GPU_ff, 0, total_compartment_count * sizeof(float));
+  cudaMemset(GPU_mech_g, 0, total_compartment_count * sizeof(float));
+  cudaMemset(GPU_mech_i, 0, total_compartment_count * sizeof(float));
+  cudaMemset(GPU_population_self_spikes, 0, population_neuron_count_ * sizeof(int));
+  cudaMemcpy(GPU_population_time_resolution, &time_resolution, sizeof(double), cudaMemcpyHostToDevice);
+
+  neuron_currents.initialize_population_runtime(current_groups,
+                                                var_arr,
+                                                param_arr,
+                                                n_var,
+                                                n_param,
+                                                population_neuron_count_,
+                                                population_compartment_count_,
+                                                compartment_voltage_base_index_,
+                                                GPU_population_self_spikes,
+                                                GPU_population_time_resolution);
+  device_tree_initialized_ = true;
+}
+
+void
+CompTree{{cm_unique_suffix}}::enqueue_population_update(float* port_input_arr,
+                                                        int port_input_arr_step,
+                                                        int port_input_port_step,
+                                                        cudaStream_t stream)
+{
+  const int total_compartment_count = population_neuron_count_ * population_compartment_count_;
+  neuron_currents.f_numstep_device(GPU_population_vars,
+                                   GPU_mech_g,
+                                   GPU_mech_i,
+                                   total_compartment_count,
+                                   0,
+                                   port_input_arr,
+                                   port_input_arr_step,
+                                   port_input_port_step,
+                                   stream);
+
+  const int compartment_block_size = 256;
+  const int compartment_grid_size =
+    (total_compartment_count + compartment_block_size - 1) / compartment_block_size;
+  cm_tree_construct_matrix_kernel<<<compartment_grid_size, compartment_block_size, 0, stream>>>(GPU_population_vars,
+                                                                                                population_n_var_,
+                                                                                                compartment_voltage_base_index_,
+                                                                                                GPU_ca__div__dt,
+                                                                                                GPU_gl__times__el,
+                                                                                                GPU_gg0,
+                                                                                                GPU_gg,
+                                                                                                GPU_ff,
+                                                                                                GPU_mech_g,
+                                                                                                GPU_mech_i,
+                                                                                                population_compartment_count_,
+                                                                                                total_compartment_count);
+
+  const int neuron_block_size = 128;
+  const int neuron_grid_size = (population_neuron_count_ + neuron_block_size - 1) / neuron_block_size;
+  cm_tree_solve_matrix_kernel<<<neuron_grid_size, neuron_block_size, 0, stream>>>(GPU_population_vars,
+                                                                                 population_n_var_,
+                                                                                 compartment_voltage_base_index_,
+                                                                                 GPU_gg,
+                                                                                 GPU_ff,
+                                                                                 GPU_hh,
+                                                                                 GPU_parent_index,
+                                                                                 population_neuron_count_,
+                                                                                 population_compartment_count_,
+                                                                                 GPU_thresholds,
+                                                                                 GPU_population_self_spikes);
+
+  {%- if has_self_spike_processing %}
+  neuron_currents.postsynaptic_synaptic_processing_device(stream);
   {%- endif %}
 }
 
-/**
- * Construct the matrix equation to be solved to advance the model one timestep
- */
 void
-CompTree{{cm_unique_suffix}}::construct_matrix( const long lag, float* port_input_arr, int port_input_port_step )
+CompTree{{cm_unique_suffix}}::capture_update_graph(float* port_input_arr,
+                                                   int port_input_arr_step,
+                                                   int port_input_port_step)
+{
+  if (update_graph_capture_stream_ == nullptr)
+  {
+    gpuErrchk(cudaStreamCreateWithFlags(&update_graph_capture_stream_, cudaStreamDefault));
+  }
+  destroy_update_graph();
+
+  gpuErrchk(cudaStreamBeginCapture(update_graph_capture_stream_, cudaStreamCaptureModeThreadLocal));
+  enqueue_population_update(port_input_arr,
+                            port_input_arr_step,
+                            port_input_port_step,
+                            update_graph_capture_stream_);
+  gpuErrchk(cudaStreamEndCapture(update_graph_capture_stream_, &update_graph_));
+  gpuErrchk(cudaGraphInstantiate(&update_graph_exec_, update_graph_, nullptr, nullptr, 0));
+
+  update_graph_port_input_arr_ = port_input_arr;
+  update_graph_port_input_arr_step_ = port_input_arr_step;
+  update_graph_port_input_port_step_ = port_input_port_step;
+}
+
+void
+CompTree{{cm_unique_suffix}}::update_population(const long lag,
+                                                float* port_input_arr,
+                                                int port_input_arr_step,
+                                                int port_input_port_step)
 {
   if (!device_tree_initialized_)
   {
-    throw std::runtime_error("Compartment tree device state has not been initialized before update");
+    throw std::runtime_error("Compartmental population device state has not been initialized before update");
   }
 
-  neuron_currents.f_numstep_device(GPU_v_comp,
+  if (!update_profiling_enabled_)
+  {
+    if (update_graph_exec_ == nullptr
+        || update_graph_port_input_arr_ != port_input_arr
+        || update_graph_port_input_arr_step_ != port_input_arr_step
+        || update_graph_port_input_port_step_ != port_input_port_step)
+    {
+      // Capture cannot inherit pending work from the legacy default stream.
+      gpuErrchk(cudaStreamSynchronize(nullptr));
+      capture_update_graph(port_input_arr, port_input_arr_step, port_input_port_step);
+    }
+
+    // Replay on NEST-GPU's default stream to preserve ordering with spike delivery.
+    gpuErrchk(cudaGraphLaunch(update_graph_exec_, nullptr));
+    return;
+  }
+
+  const int total_compartment_count = population_neuron_count_ * population_compartment_count_;
+  cudaEvent_t update_start = nullptr;
+  cudaEvent_t section_start = nullptr;
+  cudaEvent_t section_stop = nullptr;
+  if (update_profiling_enabled_)
+  {
+    cudaEventCreate(&update_start);
+    cudaEventCreate(&section_start);
+    cudaEventCreate(&section_stop);
+    cudaEventRecord(update_start);
+    cudaEventRecord(section_start);
+  }
+
+  neuron_currents.f_numstep_device(GPU_population_vars,
                                    GPU_mech_g,
                                    GPU_mech_i,
-                                   static_cast<int>(size_),
+                                   total_compartment_count,
                                    lag,
                                    port_input_arr,
+                                   port_input_arr_step,
                                    port_input_port_step);
+  if (update_profiling_enabled_)
+  {
+    cudaEventRecord(section_stop);
+    cudaEventSynchronize(section_stop);
+    profile_mechanisms_ms_ += profile_elapsed_ms(section_start, section_stop);
+    cudaEventRecord(section_start);
+  }
 
-  const int block_size = 128;
-  const int grid_size = (static_cast<int>(size_) + block_size - 1) / block_size;
-  cm_tree_construct_matrix_kernel<<<grid_size, block_size>>>(GPU_v_comp,
-                                                             GPU_ca__div__dt,
-                                                             GPU_gl__times__el,
-                                                             GPU_gg0,
-                                                             GPU_gc,
-                                                             GPU_parent_index,
-                                                             GPU_gg,
-                                                             GPU_ff,
-                                                             GPU_hh,
-                                                             GPU_mech_g,
-                                                             GPU_mech_i,
-                                                             static_cast<int>(size_));
+  const int compartment_block_size = 256;
+  const int compartment_grid_size =
+    (total_compartment_count + compartment_block_size - 1) / compartment_block_size;
+  cm_tree_construct_matrix_kernel<<<compartment_grid_size, compartment_block_size>>>(GPU_population_vars,
+                                                                                     population_n_var_,
+                                                                                     compartment_voltage_base_index_,
+                                                                                     GPU_ca__div__dt,
+                                                                                     GPU_gl__times__el,
+                                                                                     GPU_gg0,
+                                                                                     GPU_gg,
+                                                                                     GPU_ff,
+                                                                                     GPU_mech_g,
+                                                                                     GPU_mech_i,
+                                                                                     population_compartment_count_,
+                                                                                     total_compartment_count);
+  if (update_profiling_enabled_)
+  {
+    cudaEventRecord(section_stop);
+    cudaEventSynchronize(section_stop);
+    profile_matrix_construct_ms_ += profile_elapsed_ms(section_start, section_stop);
+    cudaEventRecord(section_start);
+  }
+
+  const int neuron_block_size = 128;
+  const int neuron_grid_size = (population_neuron_count_ + neuron_block_size - 1) / neuron_block_size;
+  cm_tree_solve_matrix_kernel<<<neuron_grid_size, neuron_block_size>>>(GPU_population_vars,
+                                                                      population_n_var_,
+                                                                      compartment_voltage_base_index_,
+                                                                      GPU_gg,
+                                                                      GPU_ff,
+                                                                      GPU_hh,
+                                                                      GPU_parent_index,
+                                                                      population_neuron_count_,
+                                                                      population_compartment_count_,
+                                                                      GPU_thresholds,
+                                                                      GPU_population_self_spikes);
+  if (update_profiling_enabled_)
+  {
+    cudaEventRecord(section_stop);
+    cudaEventSynchronize(section_stop);
+    profile_matrix_solve_ms_ += profile_elapsed_ms(section_start, section_stop);
+    cudaEventRecord(section_start);
+  }
+
+  {%- if has_self_spike_processing %}
+  neuron_currents.postsynaptic_synaptic_processing_device();
+  {%- endif %}
+  if (update_profiling_enabled_)
+  {
+    cudaEventRecord(section_stop);
+    cudaEventSynchronize(section_stop);
+    profile_self_spike_ms_ += profile_elapsed_ms(section_start, section_stop);
+    profile_update_ms_ += profile_elapsed_ms(update_start, section_stop);
+    ++profile_update_calls_;
+    cudaEventDestroy(update_start);
+    cudaEventDestroy(section_start);
+    cudaEventDestroy(section_stop);
+  }
 }
 
-/**
- * Solve matrix with O(n) algorithm
- */
 void
-CompTree{{cm_unique_suffix}}::solve_matrix(double threshold, int* self_spikes, float* previous_soma_voltage)
+CompTree{{cm_unique_suffix}}::set_update_profiling_enabled(bool enabled)
 {
-  cm_tree_solve_matrix_kernel<<<1, 1>>>(GPU_v_comp,
-                                        GPU_gg,
-                                        GPU_ff,
-                                        GPU_hh,
-                                        GPU_parent_index,
-                                        static_cast<int>(size_),
-                                        static_cast<float>(threshold),
-                                        self_spikes,
-                                        previous_soma_voltage);
+  update_profiling_enabled_ = enabled;
+}
+
+void
+CompTree{{cm_unique_suffix}}::reset_update_profile()
+{
+  profile_mechanisms_ms_ = 0.0;
+  profile_matrix_construct_ms_ = 0.0;
+  profile_matrix_solve_ms_ = 0.0;
+  profile_self_spike_ms_ = 0.0;
+  profile_update_ms_ = 0.0;
+  profile_update_calls_ = 0;
+}
+
+void
+CompTree{{cm_unique_suffix}}::add_update_profile_to(double& mechanisms_ms,
+                                                    double& matrix_construct_ms,
+                                                    double& matrix_solve_ms,
+                                                    double& self_spike_ms,
+                                                    double& update_ms,
+                                                    long& update_calls) const
+{
+  mechanisms_ms += profile_mechanisms_ms_;
+  matrix_construct_ms += profile_matrix_construct_ms_;
+  matrix_solve_ms += profile_matrix_solve_ms_;
+  self_spike_ms += profile_self_spike_ms_;
+  update_ms += profile_update_ms_;
+  update_calls += profile_update_calls_;
 }

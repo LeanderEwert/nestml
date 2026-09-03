@@ -189,8 +189,8 @@ public:
   std::size_t neuron_{{ continuous_name }}_continuous_input_count = 0;
   std::vector< size_t > compartment_association = {};
 
-  void f_update();
-  void f_self_spike();
+  void f_update(cudaStream_t stream = nullptr);
+  void f_self_spike(cudaStream_t stream = nullptr);
 
   void calibrate(double time_resolution);
 

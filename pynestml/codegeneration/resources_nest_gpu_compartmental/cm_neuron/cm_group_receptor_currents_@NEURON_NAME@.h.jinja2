@@ -155,11 +155,19 @@ private:
 //device variables
   float* GPU_{{receptor_name}}_vars = nullptr;
   float* GPU_{{receptor_name}}_param = nullptr;
-  int* GPU_compartment_association;
+  int* GPU_compartment_association = nullptr;
   int* GPU_rec_idx = nullptr;
   int* GPU_self_spikes = nullptr;
   double* GPU_time_resolution = nullptr;
   int mechanism_stride = 0;
+  int population_neuron_count = 1;
+  int population_n_var = 0;
+  int population_n_param = 0;
+  int population_compartment_count = 0;
+  int population_voltage_base_index = 0;
+  int var_base_index = 0;
+  int param_base_index = 0;
+  float* GPU_population_vars = nullptr;
 
 //non specific variables
   float* GPU_v_comp;
@@ -209,29 +217,42 @@ public:
 
   void new_receptor(std::size_t comp_ass, const long rec_index);
   void new_receptor(std::size_t comp_ass, const long rec_index, const nlohmann::json& receptor_params);
-  void init_pointers(int* global_self_spikes, double* global_time_resolution)
-  {
-    GPU_self_spikes = global_self_spikes;
-    GPU_time_resolution = global_time_resolution;
-  }
   void init_base_arrays(float* vars, float* params, int n_var, int n_param, int i_neuron, int var_base_index, int param_base_index, int mechanism_count)
   {
     GPU_{{receptor_name}}_vars = vars == nullptr ? nullptr : vars + i_neuron * n_var + var_base_index;
     GPU_{{receptor_name}}_param = params == nullptr ? nullptr : params + i_neuron * n_param + param_base_index;
     mechanism_stride = mechanism_count;
+    this->var_base_index = var_base_index;
+    this->param_base_index = param_base_index;
   }
+
+  void configure_population(float* var_arr,
+                            float* param_arr,
+                            int n_var,
+                            int n_param,
+                            int neuron_count,
+                            int compartment_count,
+                            int compartment_voltage_base_index,
+                            int mechanism_count,
+                            int mechanism_var_base_index,
+                            int mechanism_param_base_index,
+                            const std::vector<int>& global_compartment_association,
+                            const std::vector<int>& receptor_indices,
+                            int* global_self_spikes,
+                            double* global_time_resolution);
+  int get_var_base_index() const { return var_base_index; }
+  int get_param_base_index() const { return param_base_index; }
+  const std::vector<long>& get_receptor_indices() const { return rec_idx; }
 
   //number of receptors
   std::size_t neuron_{{ receptor_name }}_receptor_count = 0;
 
   std::vector< size_t > compartment_association = {};
 
-  void f_numstep_device(float* shared_v_comp, long lag, float* port_input_arr, int port_input_port_step{% for ode in receptor_info["Dependencies"]["concentrations"] %}, float* dep_{{ode.lhs.name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["receptors"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["channels"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["continuous"] %}, float* dep_{{inline.variable_name}}{% endfor %});
-  void add_currents_to_device(float* compartment_g, float* compartment_i, int compartment_count) const;
-  void add_total_current_to_device(float* compartment_current, int compartment_count) const;
+  void f_numstep_device(float* shared_v_comp, float* compartment_g, float* compartment_i, int total_compartment_count, long lag, float* port_input_arr, int port_input_arr_step, int port_input_port_step{% for ode in receptor_info["Dependencies"]["concentrations"] %}, float* dep_{{ode.lhs.name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["receptors"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["channels"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in receptor_info["Dependencies"]["continuous"] %}, float* dep_{{inline.variable_name}}{% endfor %}, cudaStream_t stream = nullptr);
+  void add_total_current_to_device(float* compartment_current, int compartment_count, cudaStream_t stream = nullptr) const;
 
-    void f_update();
-    void f_self_spike();
+    void f_self_spike(cudaStream_t stream = nullptr);
 
   // calibration
   void calibrate(double time_resolution);

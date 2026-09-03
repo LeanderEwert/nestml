@@ -130,7 +130,93 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
             "continuouscurrents": self.get_cm_syns_continuouscurrents_file_prefix(neuron),
         })
         namespace["cuda_printer"] = _CompartmentalCUDAPrinter(neuron, self._printer_no_origin)
+        self._enrich_mechanism_usage_flags(namespace)
         return namespace
+
+    @classmethod
+    def _enrich_mechanism_usage_flags(cls, namespace: Dict[str, Any]) -> None:
+        chan_info = namespace["chan_info"]
+        recs_info = namespace["recs_info"]
+        conc_info = namespace["conc_info"]
+        con_in_info = namespace["con_in_info"]
+        syns_info = namespace["syns_info"]
+
+        for info in chan_info.values():
+            info["requires_shared_current"] = False
+            info["has_self_spike_processing"] = cls._has_non_empty_block(info, "SelfSpikesFunction")
+        for info in recs_info.values():
+            info["requires_shared_current"] = False
+            info["has_self_spike_processing"] = (
+                cls._has_non_empty_block(info, "SelfSpikesFunction")
+                or cls._has_self_spike_convolution(info)
+            )
+        for info in conc_info.values():
+            info["requires_shared_concentration"] = False
+            info["has_self_spike_processing"] = cls._has_non_empty_block(info, "SelfSpikesFunction")
+        for info in con_in_info.values():
+            info["requires_shared_current"] = False
+            info["has_self_spike_processing"] = cls._has_non_empty_block(info, "SelfSpikesFunction")
+
+        current_infos = list(chan_info.values()) + list(recs_info.values()) + list(con_in_info.values())
+        mechanism_infos = current_infos + list(conc_info.values())
+
+        for consumer_info in mechanism_infos + list(syns_info.values()):
+            cls._mark_required_shared_outputs(consumer_info, chan_info, recs_info, conc_info, con_in_info)
+
+        namespace["has_mechanism_dependencies"] = any(
+            info.get("requires_shared_current", False)
+            for info in current_infos
+        ) or any(info.get("requires_shared_concentration", False) for info in conc_info.values())
+
+        namespace["has_self_spike_processing"] = any(
+            info.get("has_self_spike_processing", False)
+            for info in mechanism_infos
+        )
+
+    @staticmethod
+    def _mark_required_shared_outputs(consumer_info: Dict[str, Any],
+                                      chan_info: Dict[str, Dict[str, Any]],
+                                      recs_info: Dict[str, Dict[str, Any]],
+                                      conc_info: Dict[str, Dict[str, Any]],
+                                      con_in_info: Dict[str, Dict[str, Any]]) -> None:
+        dependencies = consumer_info.get("Dependencies") or {}
+        for dependency in dependencies.get("channels", []):
+            dependency_name = getattr(dependency, "variable_name", None)
+            if dependency_name in chan_info:
+                chan_info[dependency_name]["requires_shared_current"] = True
+
+        for dependency in dependencies.get("receptors", []):
+            dependency_name = getattr(dependency, "variable_name", None)
+            if dependency_name in recs_info:
+                recs_info[dependency_name]["requires_shared_current"] = True
+
+        for dependency in dependencies.get("continuous", []):
+            dependency_name = getattr(dependency, "variable_name", None)
+            if dependency_name in con_in_info:
+                con_in_info[dependency_name]["requires_shared_current"] = True
+
+        for dependency in dependencies.get("concentrations", []):
+            lhs = getattr(dependency, "lhs", None)
+            dependency_name = getattr(lhs, "name", None)
+            if dependency_name in conc_info:
+                conc_info[dependency_name]["requires_shared_concentration"] = True
+
+    @staticmethod
+    def _has_non_empty_block(info: Dict[str, Any], block_name: str) -> bool:
+        blocks = info.get("Blocks")
+        block = blocks.get(block_name) if blocks and block_name in blocks else None
+        if block is None:
+            return False
+        stmts_body = block.get_stmts_body()
+        return bool(stmts_body and stmts_body.get_stmts())
+
+    @staticmethod
+    def _has_self_spike_convolution(info: Dict[str, Any]) -> bool:
+        for convolution_info in info.get("convolutions", {}).values():
+            spikes_info = convolution_info.get("spikes") or {}
+            if spikes_info.get("name") == "self_spikes":
+                return True
+        return False
 
     def generate_module_code(self, neurons: Sequence[ASTModel], metadata: Dict[str, Dict[str, Any]]) -> None:
         """

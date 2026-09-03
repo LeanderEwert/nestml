@@ -23,6 +23,7 @@
 
 #include <cmath>
 #include <config.h>
+#include <cstdlib>
 #include <iostream>
 #include <stdexcept>
 
@@ -31,10 +32,26 @@
 
 using namespace {{neuronName}}_ns;
 
+{{neuronName}}::~{{neuronName}}()
+{
+  if (profile_update_enabled_ && profile_update_calls_ > 0)
+  {
+    std::cerr << "{{neuronName}} update profile: "
+              << "calls=" << profile_update_calls_
+              << " mechanisms_ms=" << profile_mechanisms_ms_
+              << " matrix_construct_ms=" << profile_matrix_construct_ms_
+              << " matrix_solve_ms=" << profile_matrix_solve_ms_
+              << " self_spike_ms=" << profile_self_spike_ms_
+              << " total_ms=" << profile_update_ms_
+              << std::endl;
+  }
+}
+
 int {{neuronName}}::Init(int i_node_0, int n_node, int /*n_port*/, int i_group)
 {
   BaseNeuron::Init(i_node_0, n_node, 0, i_group);
   node_type_ = i_{{neuronName}}_model;
+  profile_update_enabled_ = std::getenv("NESTML_GPU_CM_PROFILE") != nullptr;
 
   n_scal_var_ = 0;
   n_port_ = 0;
@@ -76,19 +93,28 @@ int {{neuronName}}::Calibrate(double /*time_min*/, float time_resolution)
   ensure_runtime_layout_configured();
 
   // Bind each neuron to the allocated BaseNeuron arrays and initialize device state.
+  std::vector<CompTree{{cm_unique_suffix}}*> trees;
+  std::vector<float> thresholds;
+  trees.reserve(neurons_.size());
+  thresholds.reserve(neurons_.size());
   for (size_t i = 0; i < neurons_.size(); ++i)
   {
     HostNeuronState& state = neurons_[i];
-    state.time_resolution = time_resolution_;
-    // Allocate per-neuron device scalars shared by tree and mechanisms, and copy the current time resolution/self-spike state to device memory.
-    ensure_device_shared_buffers(state);
-    // Give the compartment tree access to the device-side self-spike flag and time-resolution value used by device mechanism code.
-    state.c_tree.init_pointers(state.GPU_self_spikes, state.GPU_time_resolution);
     // Bind this neuron's compartments and mechanisms into their fixed slices of BaseNeuron var_arr_ and param_arr_ storage.
     init_runtime_base_arrays(state, static_cast<int>(i));
-    // Finalize compartment constants, copy tree topology to device memory, and calibrate all mechanism groups.
+    // Finalize compartment constants and initialize this neuron's BaseNeuron-backed mechanism values.
     state.c_tree.calibrate(time_resolution_);
+    trees.push_back(&state.c_tree);
+    thresholds.push_back(static_cast<float>(state.V_th));
   }
+  // Pack tree topology and mechanism associations for the complete population into contiguous device arrays.
+  population_tree_.initialize_population_runtime(trees,
+                                                 GetVarArr(),
+                                                 GetParamArr(),
+                                                 n_var_,
+                                                 n_param_,
+                                                 thresholds,
+                                                 time_resolution_);
   return 0;
 }
 
@@ -122,21 +148,50 @@ float* {{neuronName}}::GetVarPt(int i_neuron, std::string var_name, int port)
 int {{neuronName}}::Update(long long /*it*/, double t1)
 {
   const long to_step = static_cast<long>(t1 / time_resolution_);
-  for (size_t i = 0; i < neurons_.size(); ++i)
+  if (profile_update_enabled_)
   {
-    HostNeuronState& state = neurons_[i];
+    population_tree_.set_update_profiling_enabled(true);
+    population_tree_.reset_update_profile();
+  }
 
-    for (long lag = to_step - 1; lag < to_step; ++lag)
-    {
-      float* neuron_port_input_arr = port_input_arr_ == nullptr ? nullptr : port_input_arr_ + i * port_input_arr_step_;
-      state.c_tree.update(lag,
-                          neuron_port_input_arr,
-                          port_input_port_step_,
-                          state.V_th,
-                          state.GPU_self_spikes,
-                          state.GPU_previous_soma_voltage);
+  population_tree_.update_population(to_step - 1,
+                                     port_input_arr_,
+                                     port_input_arr_step_,
+                                     port_input_port_step_);
+
+  if (profile_update_enabled_)
+  {
+    double profile_mechanisms_ms = 0.0;
+    double profile_matrix_construct_ms = 0.0;
+    double profile_matrix_solve_ms = 0.0;
+    double profile_self_spike_ms = 0.0;
+    double profile_update_ms = 0.0;
+    long profile_update_calls = 0;
+    population_tree_.add_update_profile_to(profile_mechanisms_ms,
+                                           profile_matrix_construct_ms,
+                                           profile_matrix_solve_ms,
+                                           profile_self_spike_ms,
+                                           profile_update_ms,
+                                           profile_update_calls);
+    population_tree_.set_update_profiling_enabled(false);
+    profile_mechanisms_ms_ += profile_mechanisms_ms;
+    profile_matrix_construct_ms_ += profile_matrix_construct_ms;
+    profile_matrix_solve_ms_ += profile_matrix_solve_ms;
+    profile_self_spike_ms_ += profile_self_spike_ms;
+    profile_update_ms_ += profile_update_ms;
+    profile_update_calls_ += profile_update_calls;
+    if (t1 >= 100 && t1 < 100.001){
+        std::cout << "{{neuronName}} update profile: "
+              << "calls=" << profile_update_calls_
+              << " mechanisms_ms=" << profile_mechanisms_ms_
+              << " matrix_construct_ms=" << profile_matrix_construct_ms_
+              << " matrix_solve_ms=" << profile_matrix_solve_ms_
+              << " self_spike_ms=" << profile_self_spike_ms_
+              << " total_ms=" << profile_update_ms_
+              << std::endl;
     }
   }
+
   return 0;
 }
 
@@ -156,25 +211,6 @@ int {{neuronName}}::SetNeuronVariablesDict(int i_neuron, int n_neuron, nlohmann:
   }
   set_status(neurons_[i_neuron], dict);
   return 0;
-}
-
-void {{neuronName}}::ensure_device_shared_buffers(HostNeuronState& state)
-{
-  if (state.GPU_self_spikes == nullptr)
-  {
-    gpuErrchk(cudaMalloc(&state.GPU_self_spikes, sizeof(int)));
-  }
-  if (state.GPU_time_resolution == nullptr)
-  {
-    gpuErrchk(cudaMalloc(&state.GPU_time_resolution, sizeof(double)));
-  }
-  if (state.GPU_previous_soma_voltage == nullptr)
-  {
-    gpuErrchk(cudaMalloc(&state.GPU_previous_soma_voltage, sizeof(float)));
-  }
-  state.time_resolution = time_resolution_;
-  gpuErrchk(cudaMemcpy(state.GPU_self_spikes, &state.self_spikes, sizeof(int), cudaMemcpyHostToDevice));
-  gpuErrchk(cudaMemcpy(state.GPU_time_resolution, &state.time_resolution, sizeof(double), cudaMemcpyHostToDevice));
 }
 
 void {{neuronName}}::ensure_runtime_layout_configured()

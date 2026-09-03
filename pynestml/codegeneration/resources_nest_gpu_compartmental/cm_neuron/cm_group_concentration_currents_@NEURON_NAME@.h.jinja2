@@ -118,6 +118,14 @@ private:
   int* GPU_self_spikes = nullptr;
   double* GPU_time_resolution = nullptr;
   int mechanism_stride = 0;
+  int population_neuron_count = 1;
+  int population_n_var = 0;
+  int population_n_param = 0;
+  int population_compartment_count = 0;
+  int population_voltage_base_index = 0;
+  int var_base_index = 0;
+  int param_base_index = 0;
+  float* GPU_population_vars = nullptr;
 
   float* GPU_v_comp;
   float* GPU_{{concentration_name}};
@@ -159,26 +167,38 @@ public:
 
   void new_concentration(std::size_t comp_ass);
   void new_concentration(std::size_t comp_ass, const nlohmann::json& concentration_params);
-  void init_pointers(int* global_self_spikes, double* global_time_resolution)
-  {
-    GPU_self_spikes = global_self_spikes;
-    GPU_time_resolution = global_time_resolution;
-  }
   void init_base_arrays(float* var_arr, float* param_arr, int n_var, int n_param, int i_neuron, int base_index, int param_base_index, int mechanism_count)
   {
     GPU_{{concentration_name}}_vars = var_arr == nullptr ? nullptr : var_arr + i_neuron * n_var + base_index;
     GPU_{{concentration_name}}_param = param_arr == nullptr ? nullptr : param_arr + i_neuron * n_param + param_base_index;
     mechanism_stride = mechanism_count;
+    this->var_base_index = base_index;
+    this->param_base_index = param_base_index;
   }
+
+  void configure_population(float* var_arr,
+                            float* param_arr,
+                            int n_var,
+                            int n_param,
+                            int neuron_count,
+                            int compartment_count,
+                            int compartment_voltage_base_index,
+                            int mechanism_count,
+                            int mechanism_var_base_index,
+                            int mechanism_param_base_index,
+                            const std::vector<int>& global_compartment_association,
+                            int* global_self_spikes,
+                            double* global_time_resolution);
+  int get_var_base_index() const { return var_base_index; }
+  int get_param_base_index() const { return param_base_index; }
 
   std::size_t neuron_{{ concentration_name }}_concentration_count = 0;
   std::vector< size_t > compartment_association = {};
 
-  void f_numstep_device(float* shared_v_comp, long lag{% for ode in concentration_info["Dependencies"]["concentrations"] %}, float* dep_{{ode.lhs.name}}{% endfor %}{% for inline in concentration_info["Dependencies"]["receptors"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in concentration_info["Dependencies"]["channels"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in concentration_info["Dependencies"]["continuous"] %}, float* dep_{{inline.variable_name}}{% endfor %});
-  void add_concentrations_to_device(float* compartment_concentration, int compartment_count) const;
+  void f_numstep_device(float* shared_v_comp, long lag{% for ode in concentration_info["Dependencies"]["concentrations"] %}, float* dep_{{ode.lhs.name}}{% endfor %}{% for inline in concentration_info["Dependencies"]["receptors"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in concentration_info["Dependencies"]["channels"] %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in concentration_info["Dependencies"]["continuous"] %}, float* dep_{{inline.variable_name}}{% endfor %}, cudaStream_t stream = nullptr);
+  void add_concentrations_to_device(float* compartment_concentration, int compartment_count, cudaStream_t stream = nullptr) const;
 
-  void f_update();
-  void f_self_spike();
+  void f_self_spike({% for ode in concentration_info["Dependencies"]["concentrations"] %}{% if not loop.first %}, {% endif %}float* dep_{{ode.lhs.name}}{% endfor %}{% if concentration_info["Dependencies"]["concentrations"] and (concentration_info["Dependencies"]["receptors"] or concentration_info["Dependencies"]["channels"] or concentration_info["Dependencies"]["continuous"]) %}, {% endif %}{% for inline in concentration_info["Dependencies"]["receptors"] %}{% if not loop.first %}, {% endif %}float* dep_{{inline.variable_name}}{% endfor %}{% if concentration_info["Dependencies"]["receptors"] and (concentration_info["Dependencies"]["channels"] or concentration_info["Dependencies"]["continuous"]) %}, {% endif %}{% for inline in concentration_info["Dependencies"]["channels"] %}{% if not loop.first %}, {% endif %}float* dep_{{inline.variable_name}}{% endfor %}{% if concentration_info["Dependencies"]["channels"] and concentration_info["Dependencies"]["continuous"] %}, {% endif %}{% for inline in concentration_info["Dependencies"]["continuous"] %}{% if not loop.first %}, {% endif %}float* dep_{{inline.variable_name}}{% endfor %}{% if concentration_info["Dependencies"]["concentrations"] or concentration_info["Dependencies"]["receptors"] or concentration_info["Dependencies"]["channels"] or concentration_info["Dependencies"]["continuous"] %}, {% endif %}cudaStream_t stream = nullptr);
 
   void calibrate(double time_resolution);
 
