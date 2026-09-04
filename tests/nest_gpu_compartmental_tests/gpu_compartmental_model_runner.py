@@ -30,6 +30,13 @@ SOMA_PARAMS = {
     "e_K": -90.0,
 }
 
+SOMA_PARAMS_PASSIVE = {
+    "C_m": SOMA_PARAMS["C_m"],
+    "g_C": SOMA_PARAMS["g_C"],
+    "g_L": SOMA_PARAMS["g_L"],
+    "e_L": SOMA_PARAMS["e_L"],
+}
+
 DEND_PARAMS_PASSIVE = {
     "C_m": 1.929929,
     "g_C": 1.255439494,
@@ -106,6 +113,22 @@ def _configure_active_compartment_chain(ngpu, neuron, n_added_compartments):
         "compartments": compartments,
         "receptors": [
             {"comp_idx": 0, "receptor_type": "AMPA_NMDA"},
+        ],
+    })
+
+
+def _configure_passive_compartment_star(ngpu, neuron, n_added_compartments):
+    compartments = [{"parent_idx": -1, "params": SOMA_PARAMS_PASSIVE}]
+    compartments.extend(
+        {"parent_idx": 0, "params": DEND_PARAMS_PASSIVE}
+        for _ in range(n_added_compartments)
+    )
+
+    ngpu.SetStatus(neuron, {
+        "V_th": -50.0,
+        "compartments": compartments,
+        "receptors": [
+            {"comp_idx": 0, "receptor_type": "AMPA"},
         ],
     })
 
@@ -208,20 +231,26 @@ def run_active_population_simulation(n_neurons, sample_neuron, record=True):
     return result
 
 
-def run_active_compartment_simulation(n_added_compartments, sample_compartment, record=True):
+def run_active_compartment_simulation(n_added_compartments, sample_compartment, record=True, morphology="chain"):
     import nestgpu as ngpu
 
     n_compartments = n_added_compartments + 1
     if sample_compartment < 0 or sample_compartment >= n_compartments:
         raise ValueError("sample_compartment must be inside the created morphology")
 
-    recordables = _active_recordables_for_compartment(sample_compartment)
+    recordables = ([f"v_comp{sample_compartment}"] if morphology == "star"
+                   else _active_recordables_for_compartment(sample_compartment))
 
     t_start = time.perf_counter()
     ngpu.SetTimeResolution(DEFAULT_DT)
 
     neuron = ngpu.Create(DEFAULT_MODEL_NAME, 1)
-    _configure_active_compartment_chain(ngpu, neuron, n_added_compartments)
+    if morphology == "chain":
+        _configure_active_compartment_chain(ngpu, neuron, n_added_compartments)
+    elif morphology == "star":
+        _configure_passive_compartment_star(ngpu, neuron, n_added_compartments)
+    else:
+        raise ValueError(f"Unknown compartment morphology: {morphology}")
 
     if record:
         recorder = ngpu.CreateRecord("", recordables, [neuron[0]] * len(recordables), [0] * len(recordables))
@@ -241,6 +270,7 @@ def run_active_compartment_simulation(n_added_compartments, sample_compartment, 
         "n_added_compartments": n_added_compartments,
         "n_compartments": n_compartments,
         "sample_compartment": sample_compartment,
+        "morphology": morphology,
         "recording_enabled": record,
         "runtime": runtime,
     }
@@ -255,7 +285,8 @@ if __name__ == "__main__":
         raise SystemExit(
             "usage: gpu_compartmental_model_runner.py "
             "[default-json|active-population-json|active-population-no-record-json|"
-            "active-compartment-json|active-compartment-no-record-json] "
+            "active-compartment-json|active-compartment-no-record-json|"
+            "passive-star-compartment-json|passive-star-compartment-no-record-json] "
             "output.json [size sample_index]")
 
     if sys.argv[1] == "default-json":
@@ -289,5 +320,21 @@ if __name__ == "__main__":
         with open(sys.argv[2], "w", encoding="utf-8") as output_file:
             json.dump(run_active_compartment_simulation(int(sys.argv[3]), int(sys.argv[4]), record=False),
                       output_file)
+    elif sys.argv[1] == "passive-star-compartment-json":
+        if len(sys.argv) != 5:
+            raise SystemExit(
+                "passive-star-compartment-json requires output path, n_added_compartments, and "
+                "sample_compartment")
+        with open(sys.argv[2], "w", encoding="utf-8") as output_file:
+            json.dump(run_active_compartment_simulation(
+                int(sys.argv[3]), int(sys.argv[4]), morphology="star"), output_file)
+    elif sys.argv[1] == "passive-star-compartment-no-record-json":
+        if len(sys.argv) != 5:
+            raise SystemExit(
+                "passive-star-compartment-no-record-json requires output path, n_added_compartments, and "
+                "sample_compartment")
+        with open(sys.argv[2], "w", encoding="utf-8") as output_file:
+            json.dump(run_active_compartment_simulation(
+                int(sys.argv[3]), int(sys.argv[4]), record=False, morphology="star"), output_file)
     else:
         raise SystemExit("unknown model runner command: " + sys.argv[1])

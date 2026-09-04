@@ -1,0 +1,20 @@
+model cm_dependency:
+
+    state:
+        v_comp real = 0
+        c_Ca real = 0.0001
+
+    parameters:
+        e_leak real = -70.0
+        gbar_leak real = 0.1
+        inf_Ca real = 0.0001
+        tau_Ca ms = 10.0 ms
+        gamma_Ca real = 0.001
+
+    equations:
+        inline leak real = gbar_leak * (e_leak - v_comp) @mechanism::channel
+        inline ca_dep real = c_Ca @mechanism::channel
+        c_Ca' = (inf_Ca - c_Ca) / tau_Ca + gamma_Ca * leak / ms @mechanism::concentration
+
+    output:
+        spike
