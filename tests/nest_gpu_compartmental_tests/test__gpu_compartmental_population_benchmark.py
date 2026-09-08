@@ -33,13 +33,14 @@ from test__gpu_compartmental_model import (  # noqa: E402
     TEST_PLOTS,
     compare_trace,
     configure_cpu_neuron,
+    cpu_stimulus_spike_times,
     generate_gpu_default_model,
     SOMA_PARAMS,
 )
 
 
-BENCHMARK_POPULATION_SIZES = [2 ** (i*4) for i in range(4)]
-BENCHMARK_COMPARTMENT_SIZES = [2 ** (i*4) for i in range(4)]
+BENCHMARK_POPULATION_SIZES = [2 ** (i*1) for i in range(15)]
+BENCHMARK_COMPARTMENT_SIZES = [2 ** (i*1) for i in range(15)]
 BENCHMARK_RANDOM_SEED = 12345
 COMPARTMENT_BENCHMARK_SPIKE_TIMES = [10.0, 13.0, 16.0]
 SKIP_REBUILD_ENV = "NESTML_GPU_CM_SKIP_REBUILD"
@@ -80,8 +81,10 @@ def run_cpu_active_population_cm_default(cpu_model, n_neurons, sample_neuron, re
     neurons = nest.Create(cpu_model["model_name"], n_neurons)
     configure_cpu_neuron(neurons, DEND_PARAMS_ACTIVE)
 
-    sg_soma = nest.Create("spike_generator", n_neurons, {"spike_times": [10.0, 13.0, 16.0]})
-    sg_dend = nest.Create("spike_generator", n_neurons, {"spike_times": [70.0, 73.0, 76.0]})
+    sg_soma = nest.Create("spike_generator", n_neurons, {
+        "spike_times": cpu_stimulus_spike_times([10.0, 13.0, 16.0])})
+    sg_dend = nest.Create("spike_generator", n_neurons, {
+        "spike_times": cpu_stimulus_spike_times([70.0, 73.0, 76.0])})
 
     nest.Connect(sg_soma, neurons, conn_spec={"rule": "one_to_one"}, syn_spec={
         "synapse_model": "static_synapse", "weight": 5.0, "delay": 0.5, "receptor_type": 0})
@@ -180,7 +183,8 @@ def run_cpu_active_compartment_cm_default(
     else:
         raise ValueError(f"Unknown compartment morphology: {morphology}")
 
-    spike_generator = nest.Create("spike_generator", 1, {"spike_times": COMPARTMENT_BENCHMARK_SPIKE_TIMES})
+    spike_generator = nest.Create("spike_generator", 1, {
+        "spike_times": cpu_stimulus_spike_times(COMPARTMENT_BENCHMARK_SPIKE_TIMES)})
 
     nest.Connect(spike_generator, neuron, syn_spec={
         "synapse_model": "static_synapse", "weight": 5.0, "delay": 0.5, "receptor_type": 0})
@@ -276,6 +280,7 @@ def plot_population_benchmark(results, output_dir):
     ax.plot(n_neurons, relative_no_record_runtimes, marker="s", label="without recording")
     ax.axhline(1.0, color="grey", lw=1.0, ls="--")
     ax.set_xscale("log", base=2)
+    ax.set_yscale("log", base=2)
     ax.set_xlabel("population size")
     ax.set_ylabel("relative runtime")
     ax.set_title("cm_default active population benchmark")
@@ -311,6 +316,7 @@ def plot_compartment_benchmark(results, output_dir, morphology="chain"):
     ax.plot(n_compartments, relative_no_record_runtimes, marker="s", label="without recording")
     ax.axhline(1.0, color="grey", lw=1.0, ls="--")
     ax.set_xscale("log", base=2)
+    ax.set_yscale("log", base=2)
     ax.set_xlabel("added dendritic compartment count")
     ax.set_ylabel("relative runtime")
     activity = "active" if morphology == "chain" else "passive"

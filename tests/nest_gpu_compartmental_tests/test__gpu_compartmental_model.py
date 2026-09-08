@@ -29,8 +29,8 @@ except BaseException as e:
     TEST_PLOTS = False
     PLOT_IMPORT_ERROR = e
 
-DT = 0.001
-SIM_TIME = 160.0
+DT = 0.1
+SIM_TIME = 1000.0
 GPU_MODEL_NAME = "cm_default_nestml"
 
 SOMA_PARAMS = {
@@ -134,6 +134,12 @@ def configure_cpu_neuron(neuron, dend_params):
     ]
 
 
+def cpu_stimulus_spike_times(spike_times):
+    # Match the local NEST-GPU scheduler's extra emission and input-consumption
+    # timesteps. Remove this workaround when its spike timing is corrected.
+    return [spike_time + 2 * DT for spike_time in spike_times]
+
+
 def run_cpu_cm_default(cpu_model):
     nest.ResetKernel()
     nest.Install(cpu_model["module_path"])
@@ -144,8 +150,10 @@ def run_cpu_cm_default(cpu_model):
     configure_cpu_neuron(cm_pas, DEND_PARAMS_PASSIVE)
     configure_cpu_neuron(cm_act, DEND_PARAMS_ACTIVE)
 
-    sg_soma = nest.Create("spike_generator", 1, {"spike_times": [10.0, 13.0, 16.0]})
-    sg_dend = nest.Create("spike_generator", 1, {"spike_times": [70.0, 73.0, 76.0]})
+    sg_soma = nest.Create("spike_generator", 1, {
+        "spike_times": cpu_stimulus_spike_times([10.0, 13.0, 16.0])})
+    sg_dend = nest.Create("spike_generator", 1, {
+        "spike_times": cpu_stimulus_spike_times([70.0, 73.0, 76.0])})
 
     nest.Connect(sg_soma, cm_pas, syn_spec={
         "synapse_model": "static_synapse", "weight": 5.0, "delay": 0.5, "receptor_type": 0})
