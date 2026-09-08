@@ -595,6 +595,10 @@ class MechsInfoEnricher:
                 for variable_name, expression_str in analytic_solution["initial_values"].items():
                     variable = neuron.get_equations_blocks()[0].get_scope().resolve_to_symbol(variable_name,
                                                                                               SymbolKind.VARIABLE)
+                    if variable is None:
+                        ASTUtils.add_declaration_to_state_block(neuron, variable_name, "0")
+                        variable = neuron.get_equations_blocks()[0].get_scope().resolve_to_symbol(
+                            variable_name, SymbolKind.VARIABLE)
 
                     expression = ModelParser.parse_expression(expression_str)
                     # pretend that update expressions are in "equations" block,

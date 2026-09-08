@@ -94,16 +94,25 @@ nest::Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const lo
   , n_passed( 0 )
 {
 
-{{ read_from_dictionary.ReadFromDictionary("compartment_params", "double", "names::C_m", "ca", "", update_param=false) }};
-{{ read_from_dictionary.ReadFromDictionary("compartment_params", "double", "names::g_C", "gc", "", update_param=false) }};
-{{ read_from_dictionary.ReadFromDictionary("compartment_params", "double", "names::g_L", "gl", "", update_param=false) }};
-{{ read_from_dictionary.ReadFromDictionary("compartment_params", "double", "names::e_L", "el", "", update_param=false) }};
-  {{ cm_scalar_t }} v_comp_update = el;
+  double ca_update = ca;
+  double gc_update = gc;
+  double gl_update = gl;
+  double el_update = el;
+{{ read_from_dictionary.ReadFromDictionary("compartment_params", "double", "names::C_m", "ca_update", "", update_param=false) }};
+{{ read_from_dictionary.ReadFromDictionary("compartment_params", "double", "names::g_C", "gc_update", "", update_param=false) }};
+{{ read_from_dictionary.ReadFromDictionary("compartment_params", "double", "names::g_L", "gl_update", "", update_param=false) }};
+{{ read_from_dictionary.ReadFromDictionary("compartment_params", "double", "names::e_L", "el_update", "", update_param=false) }};
+  ca = static_cast< {{ cm_scalar_t }} >( ca_update );
+  gc = static_cast< {{ cm_scalar_t }} >( gc_update );
+  gl = static_cast< {{ cm_scalar_t }} >( gl_update );
+  el = static_cast< {{ cm_scalar_t }} >( el_update );
+
+  double v_comp_update = el;
   if( {{ exists_in_dictionary.ExistsInDictionary("compartment_params", "v_comp", true) }} )
   {
 {{ read_from_dictionary.ReadFromDictionary("compartment_params", "double", "v_comp", "v_comp_update", "", update_param=false, key_as_str=true) }};
   }
-  *v_comp = v_comp_update;
+  *v_comp = static_cast< {{ cm_scalar_t }} >( v_comp_update );
 }
 
 void

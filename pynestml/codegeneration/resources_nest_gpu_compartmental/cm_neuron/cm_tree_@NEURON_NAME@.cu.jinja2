@@ -73,17 +73,45 @@ __global__ void cm_tree_construct_matrix_kernel(float* population_vars,
     + gl__times__el[global_compartment] + mech_i[global_compartment];
 }
 
-__global__ void cm_tree_solve_matrix_kernel(float* population_vars,
-                                            int n_var,
-                                            int compartment_voltage_base_index,
-                                            float* gg,
-                                            float* ff,
-                                            const float* hh,
-                                            const int* parent_index,
-                                            int neuron_count,
-                                            int compartment_count,
-                                            const float* thresholds,
-                                            int* self_spikes)
+__global__ void cm_tree_downsweep_level_kernel(const int* level_nodes,
+                                               int level_node_count,
+                                               const int* child_offsets,
+                                               const int* child_indices,
+                                               const float* hh,
+                                               float* gg,
+                                               float* ff)
+{
+  const int level_index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (level_index >= level_node_count)
+  {
+    return;
+  }
+
+  const int node = level_nodes[level_index];
+  float node_g = gg[node];
+  float node_f = ff[node];
+  for (int child_entry = child_offsets[node + 1] - 1; child_entry >= child_offsets[node]; --child_entry)
+  {
+    const int child = child_indices[child_entry];
+    const float factor = hh[child] / gg[child];
+    node_g -= hh[child] * factor;
+    node_f -= ff[child] * factor;
+  }
+  gg[node] = node_g;
+  ff[node] = node_f;
+}
+
+__global__ void cm_tree_solve_root_and_upsweep_kernel(float* population_vars,
+                                                      int n_var,
+                                                      int compartment_voltage_base_index,
+                                                      const float* gg,
+                                                      const float* ff,
+                                                      const float* hh,
+                                                      const int* parent_index,
+                                                      int neuron_count,
+                                                      int compartment_count,
+                                                      const float* thresholds,
+                                                      int* self_spikes)
 {
   const int i_neuron = blockIdx.x * blockDim.x + threadIdx.x;
   if (i_neuron >= neuron_count || compartment_count <= 0)
@@ -96,19 +124,6 @@ __global__ void cm_tree_solve_matrix_kernel(float* population_vars,
     population_vars + i_neuron * n_var + compartment_voltage_base_index;
   const float previous_soma_voltage_value = compartment_voltages[0];
   self_spikes[i_neuron] = 0;
-
-  for (int local = compartment_count - 1; local > 0; --local)
-  {
-    const int i = compartment_base + local;
-    const int parent = parent_index[i];
-    if (parent >= 0)
-    {
-      const float g_val = hh[i] * hh[i] / gg[i];
-      const float f_val = ff[i] * hh[i] / gg[i];
-      gg[parent] -= g_val;
-      ff[parent] -= f_val;
-    }
-  }
 
   compartment_voltages[0] = ff[compartment_base] / gg[compartment_base];
   for (int local = 1; local < compartment_count; ++local)
@@ -577,7 +592,7 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
 
   std::vector<float> ca__div__dt(total_compartment_count);
   std::vector<float> gl__times__el(total_compartment_count);
-  std::vector<float> matrix_diagonal(total_compartment_count);
+  std::vector<double> matrix_diagonal_double(total_compartment_count);
   std::vector<float> hh(total_compartment_count);
   std::vector<int> parent_index(total_compartment_count);
   std::vector<GroupCurrents{{cm_unique_suffix}}*> current_groups;
@@ -596,34 +611,115 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
     }
     current_groups.push_back(&tree.neuron_currents);
     const int compartment_base = i_neuron * population_compartment_count_;
+
+    // Populate the compartment-local matrix terms before adding coupling terms.
+    for (int local = 0; local < population_compartment_count_; ++local)
+    {
+      const int global = compartment_base + local;
+      ca__div__dt[global] = static_cast<float>(tree.ca__div__dt_vec[local]);
+      gl__times__el[global] = static_cast<float>(tree.gl__times__el_vec[local]);
+      matrix_diagonal_double[global] = tree.gg0_vec[local];
+    }
+
+    int root_count = 0;
     for (int local = 0; local < population_compartment_count_; ++local)
     {
       const int global = compartment_base + local;
       const Compartment{{cm_unique_suffix}}& compartment = *tree.compartments_[local];
-      ca__div__dt[global] = static_cast<float>(tree.ca__div__dt_vec[local]);
-      gl__times__el[global] = static_cast<float>(tree.gl__times__el_vec[local]);
-
-      double diagonal = tree.gg0_vec[local];
       if (compartment.p_index >= 0)
       {
-        diagonal += compartment.gc;
+        if (compartment.p_index >= population_compartment_count_)
+        {
+          throw std::runtime_error("Compartment parent index is outside the neuron tree");
+        }
+        const int parent = compartment_base + static_cast<int>(compartment.p_index);
         hh[global] = static_cast<float>(-compartment.gc);
-        parent_index[global] = compartment_base + static_cast<int>(compartment.p_index);
+        parent_index[global] = parent;
+        matrix_diagonal_double[global] += compartment.gc;
+        matrix_diagonal_double[parent] += compartment.gc;
       }
       else
       {
+        ++root_count;
         hh[global] = 0.0f;
         parent_index[global] = -1;
       }
-      for (int child = 0; child < population_compartment_count_; ++child)
+    }
+    if (root_count != 1 || parent_index[compartment_base] != -1)
+    {
+      throw std::runtime_error("Compartmental GPU trees require exactly one root at local compartment index 0");
+    }
+  }
+
+  std::vector<int> child_offsets(total_compartment_count + 1, 0);
+  for (int node = 0; node < total_compartment_count; ++node)
+  {
+    const int parent = parent_index[node];
+    if (parent >= 0)
+    {
+      ++child_offsets[parent + 1];
+    }
+  }
+  for (int node = 0; node < total_compartment_count; ++node)
+  {
+    child_offsets[node + 1] += child_offsets[node];
+  }
+
+  std::vector<int> child_indices(child_offsets.back());
+  std::vector<int> next_child_offset(child_offsets.begin(), child_offsets.end() - 1);
+  for (int node = 0; node < total_compartment_count; ++node)
+  {
+    const int parent = parent_index[node];
+    if (parent >= 0)
+    {
+      child_indices[next_child_offset[parent]++] = node;
+    }
+  }
+
+  std::vector<int> remaining_children(total_compartment_count);
+  std::vector<int> current_level;
+  std::vector<int> next_level;
+  std::vector<int> downsweep_nodes;
+  downsweep_nodes.reserve(total_compartment_count);
+  for (int node = 0; node < total_compartment_count; ++node)
+  {
+    remaining_children[node] = child_offsets[node + 1] - child_offsets[node];
+    if (remaining_children[node] == 0)
+    {
+      current_level.push_back(node);
+    }
+  }
+
+  downsweep_level_offsets_.clear();
+  while (!current_level.empty())
+  {
+    downsweep_level_offsets_.push_back(static_cast<int>(downsweep_nodes.size()));
+    downsweep_nodes.insert(downsweep_nodes.end(), current_level.begin(), current_level.end());
+    next_level.clear();
+    for (const int node : current_level)
+    {
+      const int parent = parent_index[node];
+      if (parent >= 0)
       {
-        if (tree.compartments_[child]->p_index == local)
+        --remaining_children[parent];
+        if (remaining_children[parent] == 0)
         {
-          diagonal += tree.compartments_[child]->gc;
+          next_level.push_back(parent);
         }
       }
-      matrix_diagonal[global] = static_cast<float>(diagonal);
     }
+    current_level.swap(next_level);
+  }
+  downsweep_level_offsets_.push_back(static_cast<int>(downsweep_nodes.size()));
+  if (static_cast<int>(downsweep_nodes.size()) != total_compartment_count)
+  {
+    throw std::runtime_error("Compartment parent relations do not form valid trees");
+  }
+
+  std::vector<float> matrix_diagonal(total_compartment_count);
+  for (int node = 0; node < total_compartment_count; ++node)
+  {
+    matrix_diagonal[node] = static_cast<float>(matrix_diagonal_double[node]);
   }
 
   GPU_population_vars = var_arr;
@@ -632,6 +728,12 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
   cudaMalloc(&GPU_gg0, total_compartment_count * sizeof(float));
   cudaMalloc(&GPU_hh, total_compartment_count * sizeof(float));
   cudaMalloc(&GPU_parent_index, total_compartment_count * sizeof(int));
+  cudaMalloc(&GPU_downsweep_nodes, total_compartment_count * sizeof(int));
+  cudaMalloc(&GPU_child_offsets, (total_compartment_count + 1) * sizeof(int));
+  if (!child_indices.empty())
+  {
+    cudaMalloc(&GPU_child_indices, child_indices.size() * sizeof(int));
+  }
   cudaMalloc(&GPU_gg, total_compartment_count * sizeof(float));
   cudaMalloc(&GPU_ff, total_compartment_count * sizeof(float));
   cudaMalloc(&GPU_mech_g, total_compartment_count * sizeof(float));
@@ -645,6 +747,12 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
   cudaMemcpy(GPU_gg0, matrix_diagonal.data(), total_compartment_count * sizeof(float), cudaMemcpyHostToDevice);
   cudaMemcpy(GPU_hh, hh.data(), total_compartment_count * sizeof(float), cudaMemcpyHostToDevice);
   cudaMemcpy(GPU_parent_index, parent_index.data(), total_compartment_count * sizeof(int), cudaMemcpyHostToDevice);
+  cudaMemcpy(GPU_downsweep_nodes, downsweep_nodes.data(), total_compartment_count * sizeof(int), cudaMemcpyHostToDevice);
+  cudaMemcpy(GPU_child_offsets, child_offsets.data(), (total_compartment_count + 1) * sizeof(int), cudaMemcpyHostToDevice);
+  if (!child_indices.empty())
+  {
+    cudaMemcpy(GPU_child_indices, child_indices.data(), child_indices.size() * sizeof(int), cudaMemcpyHostToDevice);
+  }
   cudaMemcpy(GPU_thresholds, thresholds.data(), population_neuron_count_ * sizeof(float), cudaMemcpyHostToDevice);
   cudaMemset(GPU_gg, 0, total_compartment_count * sizeof(float));
   cudaMemset(GPU_ff, 0, total_compartment_count * sizeof(float));
@@ -664,6 +772,42 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
                                                 GPU_population_self_spikes,
                                                 GPU_population_time_resolution);
   device_tree_initialized_ = true;
+}
+
+void
+CompTree{{cm_unique_suffix}}::enqueue_matrix_solve(cudaStream_t stream)
+{
+  const int downsweep_block_size = 256;
+  const int level_count = static_cast<int>(downsweep_level_offsets_.size()) - 1;
+  // Level zero contains leaves, whose matrix entries need no elimination.
+  for (int level = 1; level < level_count; ++level)
+  {
+    const int level_begin = downsweep_level_offsets_[level];
+    const int level_node_count = downsweep_level_offsets_[level + 1] - level_begin;
+    const int downsweep_grid_size = (level_node_count + downsweep_block_size - 1) / downsweep_block_size;
+    cm_tree_downsweep_level_kernel<<<downsweep_grid_size, downsweep_block_size, 0, stream>>>(
+      GPU_downsweep_nodes + level_begin,
+      level_node_count,
+      GPU_child_offsets,
+      GPU_child_indices,
+      GPU_hh,
+      GPU_gg,
+      GPU_ff);
+  }
+
+  const int neuron_block_size = 128;
+  const int neuron_grid_size = (population_neuron_count_ + neuron_block_size - 1) / neuron_block_size;
+  cm_tree_solve_root_and_upsweep_kernel<<<neuron_grid_size, neuron_block_size, 0, stream>>>(GPU_population_vars,
+                                                                                           population_n_var_,
+                                                                                           compartment_voltage_base_index_,
+                                                                                           GPU_gg,
+                                                                                           GPU_ff,
+                                                                                           GPU_hh,
+                                                                                           GPU_parent_index,
+                                                                                           population_neuron_count_,
+                                                                                           population_compartment_count_,
+                                                                                           GPU_thresholds,
+                                                                                           GPU_population_self_spikes);
 }
 
 void
@@ -699,19 +843,7 @@ CompTree{{cm_unique_suffix}}::enqueue_population_update(float* port_input_arr,
                                                                                                 population_compartment_count_,
                                                                                                 total_compartment_count);
 
-  const int neuron_block_size = 128;
-  const int neuron_grid_size = (population_neuron_count_ + neuron_block_size - 1) / neuron_block_size;
-  cm_tree_solve_matrix_kernel<<<neuron_grid_size, neuron_block_size, 0, stream>>>(GPU_population_vars,
-                                                                                 population_n_var_,
-                                                                                 compartment_voltage_base_index_,
-                                                                                 GPU_gg,
-                                                                                 GPU_ff,
-                                                                                 GPU_hh,
-                                                                                 GPU_parent_index,
-                                                                                 population_neuron_count_,
-                                                                                 population_compartment_count_,
-                                                                                 GPU_thresholds,
-                                                                                 GPU_population_self_spikes);
+  enqueue_matrix_solve(stream);
 
   {%- if has_self_spike_processing %}
   neuron_currents.postsynaptic_synaptic_processing_device(stream);
@@ -822,19 +954,7 @@ CompTree{{cm_unique_suffix}}::update_population(const long lag,
     cudaEventRecord(section_start);
   }
 
-  const int neuron_block_size = 128;
-  const int neuron_grid_size = (population_neuron_count_ + neuron_block_size - 1) / neuron_block_size;
-  cm_tree_solve_matrix_kernel<<<neuron_grid_size, neuron_block_size>>>(GPU_population_vars,
-                                                                      population_n_var_,
-                                                                      compartment_voltage_base_index_,
-                                                                      GPU_gg,
-                                                                      GPU_ff,
-                                                                      GPU_hh,
-                                                                      GPU_parent_index,
-                                                                      population_neuron_count_,
-                                                                      population_compartment_count_,
-                                                                      GPU_thresholds,
-                                                                      GPU_population_self_spikes);
+  enqueue_matrix_solve(nullptr);
   if (update_profiling_enabled_)
   {
     cudaEventRecord(section_stop);

@@ -280,6 +280,14 @@ struct {{continuous_name}}{{cm_unique_suffix}}Device
   }
 {%- endfor %}
 
+{%- set device_black_list = namespace(names=["self_spikes"]) %}
+{%- if "time_resolution_var" in continuous_info %}
+{%- set device_black_list.names = device_black_list.names + [printer_no_origin.print(continuous_info["time_resolution_var"])] %}
+{%- endif %}
+{%- for old_state_name in continuous_info["old_kernel_state_variables"] %}
+{%- set device_black_list.names = device_black_list.names + [old_state_name] %}
+{%- endfor %}
+
   __device__ __forceinline__
   void update(std::size_t i) const
   {
@@ -288,24 +296,30 @@ struct {{continuous_name}}{{cm_unique_suffix}}Device
       double {{ printer_no_origin.print(continuous_info["time_resolution_var"]) }} = global_time_resolution[0];
       {%- endif %}
 
+      {%- for convolution, convolution_info in continuous_info["convolutions"].items() %}
+      {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items() %}
+      const double old_{{state_variable_name}} = y[i_{{state_variable_name}}+i];
+      {%- endfor %}
+      {%- endfor %}
+
       {%- for ode_variable, ode_info in continuous_info["ODEs"].items() %}
           {%- for propagator, propagator_info in ode_info["transformed_solutions"][0]["propagators"].items() %}
-      y[i_{{ propagator }}+i] = {{ cuda_printer.print(propagator_info["init_expression"], "i", black_list=["self_spikes"]) }};
+      y[i_{{ propagator }}+i] = {{ cuda_printer.print(propagator_info["init_expression"], "i", black_list=device_black_list.names) }};
           {%- endfor %}
           {%- for state, state_solution_info in ode_info["transformed_solutions"][0]["states"].items() %}
-      y[i_{{state}}+i] = {{ cuda_printer.print(state_solution_info["update_expression"], "i", black_list=["self_spikes"]) }};
+      y[i_{{state}}+i] = {{ cuda_printer.print(state_solution_info["update_expression"], "i", black_list=device_black_list.names) }};
           {%- endfor %}
       {%- endfor %}
 
       {%- for convolution, convolution_info in continuous_info["convolutions"].items() %}
       {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items() %}
-      y[i_{{state_variable_name}}+i] = {{ cuda_printer.print(state_variable_info["update_expression"], "i", black_list=["self_spikes"]) }};
-      y[i_{{state_variable_name}}+i] += self_spikes * {{ cuda_printer.print(state_variable_info["init_expression"], "i", black_list=["self_spikes"]) }};
+      y[i_{{state_variable_name}}+i] = {{ cuda_printer.print(state_variable_info["simultaneous_update_expression"], "i", black_list=device_black_list.names) }};
+      y[i_{{state_variable_name}}+i] += self_spikes * {{ cuda_printer.print(state_variable_info["init_expression"], "i", black_list=device_black_list.names) }};
       {%- endfor %}
       {%- endfor %}
 
-      y[i_i_tot_{{continuous_name}}+i] = {{ cuda_printer.print(continuous_info["root_expression"], "i", black_list=["self_spikes"]) }};
-      y[i_d_i_tot_dv+i] = {{ cuda_printer.print(continuous_info["inline_derivative"], "i", black_list=["self_spikes"]) }};
+      y[i_i_tot_{{continuous_name}}+i] = {{ cuda_printer.print(continuous_info["root_expression"], "i", black_list=device_black_list.names) }};
+      y[i_d_i_tot_dv+i] = {{ cuda_printer.print(continuous_info["inline_derivative"], "i", black_list=device_black_list.names) }};
       y[i_g_val+i] = - y[i_d_i_tot_dv+i];
       y[i_i_val+i] = y[i_i_tot_{{continuous_name}}+i] - y[i_d_i_tot_dv+i] * y[i_v_comp+i];
   }

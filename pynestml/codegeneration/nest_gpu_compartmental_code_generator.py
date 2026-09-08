@@ -31,7 +31,6 @@ from pynestml.codegeneration.nest_gpu_code_generator_utils import NESTGPUCodeGen
 from pynestml.codegeneration.nest_compartmental_code_generator import NESTCompartmentalCodeGenerator
 from pynestml.frontend.frontend_configuration import FrontendConfiguration
 from pynestml.meta_model.ast_model import ASTModel
-from pynestml.utils.ast_vector_parameter_setter_and_printer_factory import ASTPreAndSuffixSetterAndPrinterFactory
 from pynestml.utils.logger import Logger, LoggingLevel
 
 
@@ -287,7 +286,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
 
 class _CompartmentalCUDAPrinter:
     def __init__(self, neuron: ASTModel, printer):
-        self.printer_factory = ASTPreAndSuffixSetterAndPrinterFactory(neuron, printer)
+        self.printer = printer
         self.parameter_names = {
             symbol.get_symbol_name()
             for symbol in list(neuron.get_parameter_symbols()) + list(neuron.get_internal_symbols())
@@ -298,12 +297,19 @@ class _CompartmentalCUDAPrinter:
               param_index: Optional[str] = None, param_stride: Optional[str] = None):
         black_list = black_list or []
         suffix = "*" + stride + "+" + index + "]" if stride else "+" + index + "]"
-        index_printer = self.printer_factory.create_ast_pre_and_suffix_setter_and_printer(
-            prefix=array_name + "[i_",
-            suffix=suffix,
-            black_list=black_list,
-        )
-        code = index_printer.print(expression)
+        variable_printer = self.printer._simple_expression_printer._variable_printer
+        old_prefix = variable_printer.cpp_variable_prefix
+        old_suffix = variable_printer.cpp_variable_suffix
+        old_black_list = variable_printer.cpp_variable_black_list
+        try:
+            variable_printer.cpp_variable_prefix = array_name + "[i_"
+            variable_printer.cpp_variable_suffix = suffix
+            variable_printer.cpp_variable_black_list = set(black_list)
+            code = self.printer.print(expression)
+        finally:
+            variable_printer.cpp_variable_prefix = old_prefix
+            variable_printer.cpp_variable_suffix = old_suffix
+            variable_printer.cpp_variable_black_list = old_black_list
         if array_name != "param":
             param_index = param_index or index
             param_stride = param_stride if param_stride is not None else stride

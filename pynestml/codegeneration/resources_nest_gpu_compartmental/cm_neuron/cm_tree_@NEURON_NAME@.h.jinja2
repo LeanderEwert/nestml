@@ -138,6 +138,10 @@ private:
   float* GPU_mech_g = nullptr;
   float* GPU_mech_i = nullptr;
   int* GPU_parent_index = nullptr;
+  int* GPU_downsweep_nodes = nullptr;
+  int* GPU_child_offsets = nullptr;
+  int* GPU_child_indices = nullptr;
+  std::vector<int> downsweep_level_offsets_;
   bool base_arrays_initialized_ = false;
   bool device_tree_initialized_ = false;
   int population_neuron_count_ = 0;
@@ -164,6 +168,7 @@ private:
   long profile_update_calls_ = 0;
 
   void destroy_update_graph();
+  void enqueue_matrix_solve(cudaStream_t stream);
   void enqueue_population_update(float* port_input_arr,
                                  int port_input_arr_step,
                                  int port_input_port_step,

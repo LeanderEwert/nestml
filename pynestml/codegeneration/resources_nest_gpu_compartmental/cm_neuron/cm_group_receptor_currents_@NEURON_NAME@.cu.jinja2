@@ -453,6 +453,9 @@ struct {{receptor_name}}{{cm_unique_suffix}}Device
 {%- for replacement, expression in receptor_info["cse_body_replacements"].items() %}
 {%- set device_black_list.names = device_black_list.names + [replacement] %}
 {%- endfor %}
+{%- for old_state_name in receptor_info["old_kernel_state_variables"] %}
+{%- set device_black_list.names = device_black_list.names + [old_state_name] %}
+{%- endfor %}
 
   __device__ __forceinline__
   void update(std::size_t i) const
@@ -483,6 +486,11 @@ struct {{receptor_name}}{{cm_unique_suffix}}Device
       {%- for inline in receptor_info["Dependencies"]["continuous"] %}
       const double {{inline.variable_name}} = dep_{{inline.variable_name}} == nullptr ? 0.0 : dep_{{inline.variable_name}}[comp];
       {%- endfor %}
+      {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
+      {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items() %}
+      const double old_{{state_variable_name}} = y[i_{{state_variable_name}}*mechanism_stride+slot];
+      {%- endfor %}
+      {%- endfor %}
       {%- for replacement, expression in receptor_info["cse_function_replacements"].items() %}
       const double {{ replacement }} = {{ cuda_printer.print(expression, "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
       {%- endfor %}
@@ -501,7 +509,7 @@ struct {{receptor_name}}{{cm_unique_suffix}}Device
       // update kernel state variable / compute recaptic conductance
       {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
       {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items() %}
-      y[i_{{state_variable_name}}*mechanism_stride+slot] = {{ cuda_printer.print(state_variable_info["update_expression"], "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
+      y[i_{{state_variable_name}}*mechanism_stride+slot] = {{ cuda_printer.print(state_variable_info["simultaneous_update_expression"], "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
           {%- if convolution_info["spikes"]["name"] == "self_spikes" %}
       y[i_{{state_variable_name}}*mechanism_stride+slot] += self_spikes * {{ cuda_printer.print(state_variable_info["init_expression"], "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
           {%- else %}

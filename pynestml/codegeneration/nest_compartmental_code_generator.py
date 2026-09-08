@@ -117,7 +117,7 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
     - **use_fastexp**: Use a bounded polynomial approximation for exponential propagators in generated compartmental mechanism updates. Default: ``False``. This can improve performance, but spike shape is not necessarily preserved; benchmark spike-time accuracy for the concrete model, for example see ``tests/nest_compartmental_tests/test__fastexp_spike_timing_sweep.py``.
     - **use_fast_math**: Select floating-point compiler relaxations for generated compartmental code. Supported values are ``"None"`` for no additional relaxations, ``"soft-fast"`` for conservative relaxations, and ``"fast"`` for ``-ffast-math``. Default: ``"fast"``.
     - **enable_cse**: If ``True``, run common subexpression elimination for compartmental mechanism expressions. Default: ``True``.
-    - **fp_precision**: Floating-point precision for compartmental state and helper variables. Supported values: ``"double"``. ``"single"`` is reserved for upcoming single-precision support and currently raises an error.
+    - **fp_precision**: Floating-point precision for compartmental state and helper variables. Supported values are ``"single"`` and ``"double"``. Default: ``"double"``.
     """
 
     _default_options = {
@@ -268,8 +268,10 @@ class NESTCompartmentalCodeGenerator(CodeGenerator):
         if "enable_cse" in options and not isinstance(options["enable_cse"], bool):
             raise ValueError("`enable_cse` must be a bool.")
         if "fp_precision" in options:
-            if options["fp_precision"] != "double":
-                raise ValueError("Single precision for the NEST compartmental code generator is not supported yet; this is coming in the future.")
+            if not isinstance(options["fp_precision"], str):
+                raise ValueError("`fp_precision` must be a string.")
+            if options["fp_precision"] not in ["single", "double"]:
+                raise ValueError("`fp_precision` must be either 'single' or 'double'.")
         if options.get("use_fastexp"):
             code, message = Messages.get_cm_fastexp_accuracy_warning()
             Logger.log_message(code=code, message=message, log_level=LoggingLevel.WARNING)
