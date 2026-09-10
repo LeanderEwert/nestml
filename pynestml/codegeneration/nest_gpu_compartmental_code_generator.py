@@ -68,6 +68,9 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
     _default_options["nest_gpu_path"] = None
     _default_options["register_neuron_model"] = True
     _default_options["skip_build"] = False
+    _default_options["gpu_tree_solver"] = "hines"
+    _default_options["gpu_tree_solver_chain_length"] = 3
+    _default_options["gpu_tree_solver_base_size"] = 32
 
     def __init__(self, options: Optional[Mapping[str, Any]] = None):
         super().__init__(None)
@@ -85,6 +88,12 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
             self.nest_gpu_path = self.get_option("nest_gpu_path")
 
     def set_options(self, options: Mapping[str, Any]) -> Mapping[str, Any]:
+        if options:
+            if "gpu_tree_solver" in options and options["gpu_tree_solver"] not in ("hines", "r_edd"):
+                raise ValueError("`gpu_tree_solver` must be 'hines' or 'r_edd'.")
+            for name, minimum in (("gpu_tree_solver_chain_length", 2), ("gpu_tree_solver_base_size", 1)):
+                if name in options and (type(options[name]) is not int or options[name] < minimum):
+                    raise ValueError(f"`{name}` must be an integer >= {minimum}.")
         ret = super().set_options(options)
         if options and "nest_gpu_path" in options:
             self.nest_gpu_path = self.get_option("nest_gpu_path")
@@ -129,6 +138,8 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
             "continuouscurrents": self.get_cm_syns_continuouscurrents_file_prefix(neuron),
         })
         namespace["cuda_printer"] = _CompartmentalCUDAPrinter(neuron, self._printer_no_origin)
+        for name in ("gpu_tree_solver", "gpu_tree_solver_chain_length", "gpu_tree_solver_base_size"):
+            namespace[name] = self.get_option(name)
         self._enrich_mechanism_usage_flags(namespace)
         return namespace
 

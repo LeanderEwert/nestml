@@ -102,7 +102,7 @@ CPU_NESTML_RECORDABLES = [
 ]
 
 
-def generate_gpu_default_model(target_path):
+def generate_gpu_default_model(target_path, codegen_opts=None):
     tests_path = os.path.realpath(os.path.dirname(__file__))
     input_path = os.path.join(tests_path, "resources", "cm_default.nestml")
     if os.path.isdir(target_path):
@@ -118,6 +118,7 @@ def generate_gpu_default_model(target_path):
         codegen_opts={
             "register_neuron_model": True,
             "skip_build": False,
+            **(codegen_opts or {}),
         },
     )
 

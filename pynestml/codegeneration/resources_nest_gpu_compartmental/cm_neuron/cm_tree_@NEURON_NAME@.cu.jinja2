@@ -21,6 +21,10 @@
  */
 #include "{{neuronSpecificFileNamesCmSyns["tree"]}}.h"
 
+{% if gpu_tree_solver == 'r_edd' %}
+{% include 'r_edd/kernels.cu.jinja2' %}
+{% endif %}
+
 namespace
 {
 float profile_elapsed_ms(cudaEvent_t start, cudaEvent_t stop)
@@ -73,6 +77,7 @@ __global__ void cm_tree_construct_matrix_kernel(float* population_vars,
     + gl__times__el[global_compartment] + mech_i[global_compartment];
 }
 
+{% if gpu_tree_solver != 'r_edd' %}
 __global__ void cm_tree_downsweep_level_kernel(const int* level_nodes,
                                                int level_node_count,
                                                const int* child_offsets,
@@ -137,6 +142,7 @@ __global__ void cm_tree_solve_root_and_upsweep_kernel(float* population_vars,
   self_spikes[i_neuron] =
     (compartment_voltages[0] >= thresholds[i_neuron] && previous_soma_voltage_value < thresholds[i_neuron]) ? 1 : 0;
 }
+{% endif %}
 }
 
 Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index)
@@ -761,6 +767,11 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
   cudaMemset(GPU_population_self_spikes, 0, population_neuron_count_ * sizeof(int));
   cudaMemcpy(GPU_population_time_resolution, &time_resolution, sizeof(double), cudaMemcpyHostToDevice);
 
+{% if gpu_tree_solver == 'r_edd' %}
+  r_edd_solver_ = std::make_shared<cm_r_edd{{cm_unique_suffix}}::Solver>();
+  r_edd_solver_->initialize(parent_index, hh, population_compartment_count_);
+{% endif %}
+
   neuron_currents.initialize_population_runtime(current_groups,
                                                 var_arr,
                                                 param_arr,
@@ -777,6 +788,11 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
 void
 CompTree{{cm_unique_suffix}}::enqueue_matrix_solve(cudaStream_t stream)
 {
+{% if gpu_tree_solver == 'r_edd' %}
+  r_edd_solver_->solve(GPU_gg, GPU_ff, GPU_population_vars,
+                      population_n_var_, compartment_voltage_base_index_,
+                      GPU_thresholds, GPU_population_self_spikes, stream);
+{% else %}
   const int downsweep_block_size = 256;
   const int level_count = static_cast<int>(downsweep_level_offsets_.size()) - 1;
   // Level zero contains leaves, whose matrix entries need no elimination.
@@ -808,6 +824,7 @@ CompTree{{cm_unique_suffix}}::enqueue_matrix_solve(cudaStream_t stream)
                                                                                            population_compartment_count_,
                                                                                            GPU_thresholds,
                                                                                            GPU_population_self_spikes);
+{% endif %}
 }
 
 void

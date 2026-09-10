@@ -226,6 +226,50 @@ Here is a small benchmark example that shows the performance ratio (y-axis) as t
 
 Be aware that we are using the ``-ffast-math`` flag when compiling the model by default. This can potentially lead to precision problems and inconsistencies across different systems. If you encounter unexpected results or want to be on the safe side, you can disable this by removing the flag from the ``CMakeLists.txt``, which is part of the generated code. Note, however, that this may inhibit the compiler's ability to vectorize parts of the code in some cases.
 
+GPU tree solver selection
+-------------------------
+
+The experimental ``NEST_GPU_compartmental`` target supports two tree solvers,
+selected when generating the model. The default, ``gpu_tree_solver="hines"``,
+preserves the existing level-wise elimination and per-neuron back substitution.
+To generate the recursive exact domain decomposition solver (R-FINE-TPT from
+Algorithm 3 of Vooturi et al., HiPC 2017), use:
+
+.. code-block:: python
+
+   generate_nest_gpu_compartmental_target(
+       input_path="model.nestml",
+       target_path="target_gpu",
+       codegen_opts={
+           "gpu_tree_solver": "r_edd",
+           "gpu_tree_solver_chain_length": 3,
+           "gpu_tree_solver_base_size": 32,
+       },
+   )
+
+``gpu_tree_solver_chain_length`` is an integer of at least 2 (default 3).
+It controls the spacing of additional junctions along branches; the independent
+tridiagonal interiors contain at most this many compartments minus one.
+``gpu_tree_solver_base_size`` is a positive integer (default 32), specifying
+the largest reduced neuron size at which decomposition stops. Decomposition
+also stops when a level would remove fewer than one quarter of its nodes.
+This prevents excessive recursion for trees dominated by branching points.
+
+The topology and workspace are prepared once on the host during population
+initialization. All numerical stages, including the base Hines solve, run on
+the GPU and support CUDA graph replay without per-timestep host transfers.
+Matrix factors are recomputed each timestep; neurons may have different
+matrix coefficients and parent relations within the existing requirement
+of equal compartment counts per population. Original compartment indices
+and soma threshold-crossing semantics are preserved.
+
+The solver uses the GPU pipeline's single-precision matrix values. Its
+elimination order differs from the default solver, so results need not be
+bitwise identical. The chain length and base size are tuning parameters;
+performance should be measured for the intended morphology and population.
+These options apply only to the GPU compartmental target and require
+regenerating the model to change the selected solver.
+
 See also
 --------
 

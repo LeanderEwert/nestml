@@ -39,8 +39,8 @@ from test__gpu_compartmental_model import (  # noqa: E402
 )
 
 
-BENCHMARK_POPULATION_SIZES = [2 ** (i*1) for i in range(15)]
-BENCHMARK_COMPARTMENT_SIZES = [2 ** (i*1) for i in range(15)]
+BENCHMARK_POPULATION_SIZES = [2 ** (i*1) for i in range(16)]
+BENCHMARK_COMPARTMENT_SIZES = [2 ** (i*1) for i in range(16)]
 BENCHMARK_RANDOM_SEED = 12345
 COMPARTMENT_BENCHMARK_SPIKE_TIMES = [10.0, 13.0, 16.0]
 SKIP_REBUILD_ENV = "NESTML_GPU_CM_SKIP_REBUILD"
@@ -67,7 +67,11 @@ def benchmark_target_path():
         os.makedirs(target_path, exist_ok=True)
         print(f"Skipping cm_default_nestml rebuild because {SKIP_REBUILD_ENV} is set")
     else:
-        generate_gpu_default_model(target_path)
+        generate_gpu_default_model(target_path, codegen_opts={
+            "gpu_tree_solver": "r_edd",
+            "gpu_tree_solver_chain_length": 3,
+            "gpu_tree_solver_base_size": 32,
+        })
 
     return target_path
 

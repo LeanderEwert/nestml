@@ -64,6 +64,10 @@ along with NEST.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "cuda_error.h"
 
+{% if gpu_tree_solver == 'r_edd' %}
+{% include 'r_edd/device.h.jinja2' %}
+{% endif %}
+
 class Compartment{{cm_unique_suffix}}
 {
 public:
@@ -142,6 +146,11 @@ private:
   int* GPU_child_offsets = nullptr;
   int* GPU_child_indices = nullptr;
   std::vector<int> downsweep_level_offsets_;
+{% if gpu_tree_solver == 'r_edd' %}
+  // Host neuron states are copyable while the population vector is built.
+  // Allocate solver workspace only on the population tree at initialization.
+  std::shared_ptr<cm_r_edd{{cm_unique_suffix}}::Solver> r_edd_solver_;
+{% endif %}
   bool base_arrays_initialized_ = false;
   bool device_tree_initialized_ = false;
   int population_neuron_count_ = 0;
