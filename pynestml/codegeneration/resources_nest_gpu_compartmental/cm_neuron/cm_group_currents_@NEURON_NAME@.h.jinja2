@@ -381,6 +381,16 @@ public:
     param_offset += {{receptor_name}}{{receptor_suffix}}.neuron_{{receptor_name}}_receptor_count * ({{receptor_info["Parameters"]|length}} + {{receptor_info["internals_used_declared"]|length}});
     {% endfor -%}
 
+    {%- for synapse_name, synapse_info in syns_info.items() %}
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    {%- set member_name = receptor_name ~ receptor_suffix ~ "_con_" ~ synapse_name %}
+    {%- set pair_namespace = "paired_" ~ receptor_name ~ cm_unique_suffix ~ "_" ~ synapse_name %}
+    {{member_name}}.init_base_arrays(var_arr, param_arr, n_var, n_param, i_neuron, var_offset, param_offset, {{member_name}}.neuron_{{receptor_name}}_receptor_count);
+    var_offset += {{member_name}}.neuron_{{receptor_name}}_receptor_count * {{pair_namespace}}::N_{{receptor_name}}_VARS;
+    param_offset += {{member_name}}.neuron_{{receptor_name}}_receptor_count * {{pair_namespace}}::N_{{receptor_name}}_PARAM;
+    {%- endfor %}
+    {%- endfor %}
+
     {%- for continuous_name, continuous_info in con_in_info.items() %}
     {{continuous_name}}{{continuous_suffix}}.init_base_arrays(var_arr, param_arr, n_var, n_param, i_neuron, var_offset, param_offset, {{continuous_name}}{{continuous_suffix}}.neuron_{{continuous_name}}_continuous_input_count);
     var_offset += {{continuous_name}}{{continuous_suffix}}.neuron_{{continuous_name}}_continuous_input_count * ({{continuous_info["States"]|length}} + 1);
@@ -573,6 +583,121 @@ public:
     }
     {% endfor -%}
     {% endfor -%}
+
+    {%- for synapse_name, synapse_info in syns_info.items() %}
+    {%- for receptor_name, receptor_info in recs_info.items() %}
+    {%- set member_name = receptor_name ~ receptor_suffix ~ "_con_" ~ synapse_name %}
+    {%- set pair_namespace = "paired_" ~ receptor_name ~ cm_unique_suffix ~ "_" ~ synapse_name %}
+{%- for mechanism_info in [receptor_info, synapse_info] %}
+{%- for name, state_info in mechanism_info["States"].items() %}
+
+{%- set record_name = "__" ~ receptor_name ~ "_" ~ synapse_name ~ "_" ~ name %}
+{%- if name in receptor_info["States"] or name in synapse_info["States"] or name in synapse_info["Inlines"] %}
+{%- set record_name = name %}
+{%- elif name in receptor_info["convolutions"] %}
+{%- set record_name = receptor_info["convolutions"][name]["kernel"]["name"] %}
+{%- endif %}
+    for (long receptor_index : {{member_name}}.get_receptor_indices())
+      scal_var_names.push_back("{{record_name}}" + std::to_string(receptor_index));
+
+{%- endfor %}
+{%- for convolution_info in mechanism_info["convolutions"].values() %}
+{%- for name in convolution_info["analytic_solution"]["propagators"] %}
+
+{%- set record_name = "__" ~ receptor_name ~ "_" ~ synapse_name ~ "_" ~ name %}
+{%- if name in receptor_info["States"] or name in synapse_info["States"] or name in synapse_info["Inlines"] %}
+{%- set record_name = name %}
+{%- elif name in receptor_info["convolutions"] %}
+{%- set record_name = receptor_info["convolutions"][name]["kernel"]["name"] %}
+{%- endif %}
+    for (long receptor_index : {{member_name}}.get_receptor_indices())
+      scal_var_names.push_back("{{record_name}}" + std::to_string(receptor_index));
+
+{%- endfor %}
+{%- for name in convolution_info["analytic_solution"]["kernel_states"] %}
+
+{%- set record_name = "__" ~ receptor_name ~ "_" ~ synapse_name ~ "_" ~ name %}
+{%- if name in receptor_info["States"] or name in synapse_info["States"] or name in synapse_info["Inlines"] %}
+{%- set record_name = name %}
+{%- elif name in receptor_info["convolutions"] %}
+{%- set record_name = receptor_info["convolutions"][name]["kernel"]["name"] %}
+{%- endif %}
+    for (long receptor_index : {{member_name}}.get_receptor_indices())
+      scal_var_names.push_back("{{record_name}}" + std::to_string(receptor_index));
+
+{%- endfor %}
+{%- endfor %}
+{%- for ode_info in mechanism_info["ODEs"].values() %}
+{%- for name in ode_info["transformed_solutions"][0]["propagators"] %}
+
+{%- set record_name = "__" ~ receptor_name ~ "_" ~ synapse_name ~ "_" ~ name %}
+{%- if name in receptor_info["States"] or name in synapse_info["States"] or name in synapse_info["Inlines"] %}
+{%- set record_name = name %}
+{%- elif name in receptor_info["convolutions"] %}
+{%- set record_name = receptor_info["convolutions"][name]["kernel"]["name"] %}
+{%- endif %}
+    for (long receptor_index : {{member_name}}.get_receptor_indices())
+      scal_var_names.push_back("{{record_name}}" + std::to_string(receptor_index));
+
+{%- endfor %}
+{%- endfor %}
+{%- endfor %}
+{%- for name in synapse_info["Inlines"] %}
+
+{%- set record_name = "__" ~ receptor_name ~ "_" ~ synapse_name ~ "_" ~ name %}
+{%- if name in receptor_info["States"] or name in synapse_info["States"] or name in synapse_info["Inlines"] %}
+{%- set record_name = name %}
+{%- elif name in receptor_info["convolutions"] %}
+{%- set record_name = receptor_info["convolutions"][name]["kernel"]["name"] %}
+{%- endif %}
+    for (long receptor_index : {{member_name}}.get_receptor_indices())
+      scal_var_names.push_back("{{record_name}}" + std::to_string(receptor_index));
+
+{%- endfor %}
+{%- for declaration in synapse_info["InFunctionDeclarationsVars"] %}
+{%- for variable in declaration.get_variables() %}
+{%- set name = variable.name %}
+
+{%- set record_name = "__" ~ receptor_name ~ "_" ~ synapse_name ~ "_" ~ name %}
+{%- if name in receptor_info["States"] or name in synapse_info["States"] or name in synapse_info["Inlines"] %}
+{%- set record_name = name %}
+{%- elif name in receptor_info["convolutions"] %}
+{%- set record_name = receptor_info["convolutions"][name]["kernel"]["name"] %}
+{%- endif %}
+    for (long receptor_index : {{member_name}}.get_receptor_indices())
+      scal_var_names.push_back("{{record_name}}" + std::to_string(receptor_index));
+
+{%- endfor %}
+{%- endfor %}
+{%- set public_name = receptor_name ~ "_" ~ synapse_name %}
+{%- for name in ["__" ~ public_name ~ "_v_comp", "__" ~ public_name ~ "_s_val", public_name,
+                "g_" ~ public_name, "__" ~ public_name ~ "_i_val", "__" ~ public_name ~ "_i_tot_dv",
+                "__" ~ public_name ~ "_d_i_tot_dv", "__" ~ public_name ~ "_delivery_delay", "__" ~ public_name ~ "_delivery_cursor"] %}
+    for (long receptor_index : {{member_name}}.get_receptor_indices())
+      scal_var_names.push_back("{{name}}" + std::to_string(receptor_index));
+{%- endfor %}
+{%- for mechanism_info in [receptor_info, synapse_info] %}
+{%- for name, parameter_info in mechanism_info["Parameters"].items() %}
+
+    for (long receptor_index : {{member_name}}.get_receptor_indices())
+      scal_param_names.push_back("{{receptor_name}}_{{synapse_name}}_{{name}}" + std::to_string(receptor_index));
+
+{%- endfor %}
+{%- endfor %}{%- for name, declaration in receptor_info["internals_used_declared"] %}
+
+    for (long receptor_index : {{member_name}}.get_receptor_indices())
+      scal_param_names.push_back("{{receptor_name}}_{{synapse_name}}_{{name}}" + std::to_string(receptor_index));
+
+{%- endfor %}
+{%- for name, internal_info in synapse_info["Internals"].items() %}
+{%- if name != "__h" and not name.startswith("__P__") %}
+
+    for (long receptor_index : {{member_name}}.get_receptor_indices())
+      scal_param_names.push_back("{{receptor_name}}_{{synapse_name}}_{{name}}" + std::to_string(receptor_index));
+
+{%- endif %}
+{%- endfor %}    {%- endfor %}
+    {%- endfor %}
 
     {%- for continuous_name, continuous_info in con_in_info.items() %}
     {%- for variable_name, variable_info in continuous_info["States"].items() %}
@@ -889,10 +1014,10 @@ public:
     {%- for receptor_name, receptor_info in recs_info.items() %}
     {%- for synapse_name, synapse_info in syns_info.items() %}
     {%- with  %}
-    {%- set conc_dep = set(receptor_info["Dependencies"]["concentrations"]).union(synapse_info["Dependencies"]["concentrations"])%}
-    {%- set rec_dep = set(receptor_info["Dependencies"]["receptors"]).union(synapse_info["Dependencies"]["receptors"])%}
-    {%- set chan_dep = set(receptor_info["Dependencies"]["channels"]).union(synapse_info["Dependencies"]["channels"])%}
-    {%- set con_in_dep = set(receptor_info["Dependencies"]["continuous"]).union(synapse_info["Dependencies"]["continuous"])%}
+    {%- set conc_dep = set(receptor_info["Dependencies"]["concentrations"]).union(synapse_info["Dependencies"]["concentrations"]) | sort(attribute="lhs.name")%}
+    {%- set rec_dep = set(receptor_info["Dependencies"]["receptors"]).union(synapse_info["Dependencies"]["receptors"]) | sort(attribute="variable_name")%}
+    {%- set chan_dep = set(receptor_info["Dependencies"]["channels"]).union(synapse_info["Dependencies"]["channels"]) | sort(attribute="variable_name")%}
+    {%- set con_in_dep = set(receptor_info["Dependencies"]["continuous"]).union(synapse_info["Dependencies"]["continuous"]) | sort(attribute="variable_name")%}
     {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.f_numstep_device(shared_v_comp, compartment_g, compartment_i, compartment_count, lag, port_input_arr, port_input_arr_step, port_input_port_step{% for ode in conc_dep %}, GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% for inline in rec_dep %}, GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% for inline in chan_dep %}, GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% for inline in con_in_dep %}, GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %}, stream);
     {%- endwith %}
     {% endfor -%}
@@ -902,14 +1027,13 @@ public:
   void postsynaptic_synaptic_processing_device(cudaStream_t stream = nullptr){
     {%- if has_self_spike_processing %}
     {%- for receptor_name, receptor_info in recs_info.items() %}
-    {%- if receptor_info["has_self_spike_processing"] %}
-        {%- for synapse_name, synapse_info in syns_info.items() %}
-    {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.postsynaptic_synaptic_processing();
+    {%- for synapse_name, synapse_info in syns_info.items() %}
     {{receptor_name}}{{receptor_suffix}}_con_{{synapse_name}}.f_self_spike(stream);
-        {% endfor -%}
+    {%- endfor %}
+    {%- if receptor_info["has_self_spike_processing"] %}
     {{receptor_name}}{{receptor_suffix}}.f_self_spike(stream);
     {%- endif %}
-    {% endfor -%}
+    {%- endfor %}
     {%- for ion_channel_name, channel_info in chan_info.items() %}
     {%- if channel_info["has_self_spike_processing"] %}
     {{ion_channel_name}}{{channel_suffix}}.f_self_spike({% for ode in channel_info["Dependencies"]["concentrations"] %}{% if not loop.first %}, {% endif %}GPU_{{ode.lhs.name}}{{concentration_suffix}}_shared_concentration{% endfor %}{% if channel_info["Dependencies"]["concentrations"] and (channel_info["Dependencies"]["receptors"] or channel_info["Dependencies"]["channels"] or channel_info["Dependencies"]["continuous"]) %}, {% endif %}{% for inline in channel_info["Dependencies"]["receptors"] %}{% if not loop.first %}, {% endif %}GPU_{{inline.variable_name}}{{receptor_suffix}}_shared_current{% endfor %}{% if channel_info["Dependencies"]["receptors"] and (channel_info["Dependencies"]["channels"] or channel_info["Dependencies"]["continuous"]) %}, {% endif %}{% for inline in channel_info["Dependencies"]["channels"] %}{% if not loop.first %}, {% endif %}GPU_{{inline.variable_name}}{{channel_suffix}}_shared_current{% endfor %}{% if channel_info["Dependencies"]["channels"] and channel_info["Dependencies"]["continuous"] %}, {% endif %}{% for inline in channel_info["Dependencies"]["continuous"] %}{% if not loop.first %}, {% endif %}GPU_{{inline.variable_name}}{{continuous_suffix}}_shared_current{% endfor %}{% if channel_info["Dependencies"]["concentrations"] or channel_info["Dependencies"]["receptors"] or channel_info["Dependencies"]["channels"] or channel_info["Dependencies"]["continuous"] %}, {% endif %}stream);

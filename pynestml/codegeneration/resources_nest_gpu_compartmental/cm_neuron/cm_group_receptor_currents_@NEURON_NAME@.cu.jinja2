@@ -867,3 +867,759 @@ inline {{ function_declaration.FunctionDeclaration(function, ""~receptor_name~cm
 
 // {{receptor_name}} receptor end ///////////////////////////////////////////////////////////
 {%- endfor %}
+
+
+////////////////////////////////////// receptors with synapses attached
+{%- for synapse_name, synapse_info in syns_info.items() %}
+{%- for receptor_name, receptor_info in recs_info.items() %}
+{%- set class_name = receptor_name ~ cm_unique_suffix ~ "_con_" ~ synapse_name %}
+{%- set conc_dep = set(receptor_info["Dependencies"]["concentrations"]).union(synapse_info["Dependencies"]["concentrations"]) | sort(attribute="lhs.name") %}
+{%- set rec_dep = set(receptor_info["Dependencies"]["receptors"]).union(synapse_info["Dependencies"]["receptors"]) | sort(attribute="variable_name") %}
+{%- set chan_dep = set(receptor_info["Dependencies"]["channels"]).union(synapse_info["Dependencies"]["channels"]) | sort(attribute="variable_name") %}
+{%- set con_in_dep = set(receptor_info["Dependencies"]["continuous"]).union(synapse_info["Dependencies"]["continuous"]) | sort(attribute="variable_name") %}
+// Keep indices local to this pair: different synapse models can both define w, etc.
+namespace paired_{{receptor_name}}{{cm_unique_suffix}}_{{synapse_name}} {
+void {{class_name}}::new_receptor(std::size_t comp_ass, const long rec_index)
+{
+  new_receptor(comp_ass, rec_index, nlohmann::json::object());
+}
+
+void {{class_name}}::new_receptor(std::size_t comp_ass, const long rec_index, const nlohmann::json& receptor_params)
+{
+  if (receptor_params.contains("{{synapse_info['DelayVariable']}}"))
+  {
+    const double delay = receptor_params.at("{{synapse_info['DelayVariable']}}").get<double>();
+    if (!std::isfinite(delay) || delay <= 0.0)
+      throw std::runtime_error("Synaptic receptor delay must be positive and finite");
+  }
+  const std::size_t i = neuron_{{receptor_name}}_receptor_count++;
+  compartment_association.push_back(comp_ass);
+  rec_idx.push_back(rec_index);
+  {%- for mechanism_info in [receptor_info, synapse_info] %}
+{%- for name, parameter_info in mechanism_info["Parameters"].items() %}
+{%- set expression = parameter_info["rhs_expression"] %}
+  {{name}}.push_back({{vector_printer.print(expression, "i")}});
+  if (receptor_params.contains("{{name}}")) {{name}}[i] = receptor_params.at("{{name}}").get<double>();
+{%- endfor %}
+{%- endfor %}
+  {%- for mechanism_info in [receptor_info, synapse_info] %}
+{%- for name, state_info in mechanism_info["States"].items() %}
+{%- set expression = state_info["rhs_expression"] %}
+  {{name}}.push_back({{vector_printer.print(expression, "i") if expression else "0.0"}});
+  if (receptor_params.contains("{{name}}")) {{name}}[i] = receptor_params.at("{{name}}").get<double>();
+{%- endfor %}
+{%- for convolution_info in mechanism_info["convolutions"].values() %}
+{%- for name in convolution_info["analytic_solution"]["propagators"] %}
+  {{name}}.push_back(0.0);
+  if (receptor_params.contains("{{name}}")) {{name}}[i] = receptor_params.at("{{name}}").get<double>();
+{%- endfor %}
+{%- for name in convolution_info["analytic_solution"]["kernel_states"] %}
+  {{name}}.push_back(0.0);
+  if (receptor_params.contains("{{name}}")) {{name}}[i] = receptor_params.at("{{name}}").get<double>();
+{%- endfor %}
+{%- endfor %}
+{%- for ode_info in mechanism_info["ODEs"].values() %}
+{%- for name in ode_info["transformed_solutions"][0]["propagators"] %}
+  {{name}}.push_back(0.0);
+  if (receptor_params.contains("{{name}}")) {{name}}[i] = receptor_params.at("{{name}}").get<double>();
+{%- endfor %}
+{%- endfor %}
+{%- endfor %}
+{%- for name in synapse_info["Inlines"] %}
+  {{name}}.push_back(0.0);
+  if (receptor_params.contains("{{name}}")) {{name}}[i] = receptor_params.at("{{name}}").get<double>();
+{%- endfor %}
+{%- for declaration in synapse_info["InFunctionDeclarationsVars"] %}
+{%- for variable in declaration.get_variables() %}
+{%- set name = variable.name %}
+  {{name}}.push_back(0.0);
+  if (receptor_params.contains("{{name}}")) {{name}}[i] = receptor_params.at("{{name}}").get<double>();
+{%- endfor %}
+{%- endfor %}
+  {%- for name, declaration in receptor_info["internals_used_declared"] %}
+  {{name}}.push_back(0.0);
+{%- endfor %}
+{%- for name, internal_info in synapse_info["Internals"].items() %}
+{%- if name != "__h" and not name.startswith("__P__") %}
+  {{name}}.push_back(0.0);
+{%- endif %}
+{%- endfor %}
+  // As on CPU, this delay belongs to the receptor, after pre-spike plasticity.
+  delivery_delays.push_back(receptor_params.value("{{synapse_info['DelayVariable']}}", -1.0));
+}
+
+void {{class_name}}::calibrate(double time_resolution)
+{
+  if (neuron_{{receptor_name}}_receptor_count == 0) return;
+  if (GPU_{{receptor_name}}_vars == nullptr || (N_{{receptor_name}}_PARAM && GPU_{{receptor_name}}_param == nullptr))
+    throw std::runtime_error("{{class_name}} base arrays were not initialized before calibrate()");
+  std::vector<double> __h(neuron_{{receptor_name}}_receptor_count, time_resolution);
+  for (std::size_t i = 0; i < neuron_{{receptor_name}}_receptor_count; ++i)
+  {
+    {%- for name, declaration in receptor_info["internals_used_declared"] %}
+{%- set expression = declaration.get_expression() %}
+    {{name}}[i] = {{vector_printer.print(expression, "i")}};
+{%- endfor %}
+{%- for name, internal_info in synapse_info["Internals"].items() %}
+{%- if name != "__h" and not name.startswith("__P__") %}
+{%- set expression = internal_info["rhs_expression"] %}
+    {{name}}[i] = {{vector_printer.print(expression, "i")}};
+{%- endif %}
+{%- endfor %}
+    {%- for mechanism_info in [receptor_info, synapse_info] %}
+{%- for convolution_info in mechanism_info["convolutions"].values() %}
+{%- for name, propagator_info in convolution_info["analytic_solution"]["propagators"].items() %}
+{%- set expression = propagator_info["init_expression"] %}
+    {{name}}[i] = {{vector_printer.print(expression, "i")}};
+{%- endfor %}
+{%- endfor %}
+{%- endfor %}
+    float value = 0.0f;
+    for (int state = 0; state < N_{{receptor_name}}_VARS; ++state)
+      cudaMemcpy(GPU_{{receptor_name}}_vars + state * mechanism_stride + i, &value, sizeof(float), cudaMemcpyHostToDevice);
+    {%- for mechanism_info in [receptor_info, synapse_info] %}
+{%- for name, state_info in mechanism_info["States"].items() %}
+    value = static_cast<float>({{name}}[i]);
+    cudaMemcpy(GPU_{{receptor_name}}_vars + i_{{name}} * mechanism_stride + i, &value, sizeof(float), cudaMemcpyHostToDevice);
+{%- endfor %}
+{%- for convolution_info in mechanism_info["convolutions"].values() %}
+{%- for name in convolution_info["analytic_solution"]["propagators"] %}
+    value = static_cast<float>({{name}}[i]);
+    cudaMemcpy(GPU_{{receptor_name}}_vars + i_{{name}} * mechanism_stride + i, &value, sizeof(float), cudaMemcpyHostToDevice);
+{%- endfor %}
+{%- for name in convolution_info["analytic_solution"]["kernel_states"] %}
+    value = static_cast<float>({{name}}[i]);
+    cudaMemcpy(GPU_{{receptor_name}}_vars + i_{{name}} * mechanism_stride + i, &value, sizeof(float), cudaMemcpyHostToDevice);
+{%- endfor %}
+{%- endfor %}
+{%- for ode_info in mechanism_info["ODEs"].values() %}
+{%- for name in ode_info["transformed_solutions"][0]["propagators"] %}
+    value = static_cast<float>({{name}}[i]);
+    cudaMemcpy(GPU_{{receptor_name}}_vars + i_{{name}} * mechanism_stride + i, &value, sizeof(float), cudaMemcpyHostToDevice);
+{%- endfor %}
+{%- endfor %}
+{%- endfor %}
+{%- for name in synapse_info["Inlines"] %}
+    value = static_cast<float>({{name}}[i]);
+    cudaMemcpy(GPU_{{receptor_name}}_vars + i_{{name}} * mechanism_stride + i, &value, sizeof(float), cudaMemcpyHostToDevice);
+{%- endfor %}
+{%- for declaration in synapse_info["InFunctionDeclarationsVars"] %}
+{%- for variable in declaration.get_variables() %}
+{%- set name = variable.name %}
+    value = static_cast<float>({{name}}[i]);
+    cudaMemcpy(GPU_{{receptor_name}}_vars + i_{{name}} * mechanism_stride + i, &value, sizeof(float), cudaMemcpyHostToDevice);
+{%- endfor %}
+{%- endfor %}
+    {%- for mechanism_info in [receptor_info, synapse_info] %}
+{%- for name, parameter_info in mechanism_info["Parameters"].items() %}
+    value = static_cast<float>({{name}}[i]);
+    cudaMemcpy(GPU_{{receptor_name}}_param + i_{{name}} * mechanism_stride + i, &value, sizeof(float), cudaMemcpyHostToDevice);
+{%- endfor %}
+{%- endfor %}
+    {%- for name, declaration in receptor_info["internals_used_declared"] %}
+    value = static_cast<float>({{name}}[i]);
+    cudaMemcpy(GPU_{{receptor_name}}_param + i_{{name}} * mechanism_stride + i, &value, sizeof(float), cudaMemcpyHostToDevice);
+{%- endfor %}
+{%- for name, internal_info in synapse_info["Internals"].items() %}
+{%- if name != "__h" and not name.startswith("__P__") %}
+    value = static_cast<float>({{name}}[i]);
+    cudaMemcpy(GPU_{{receptor_name}}_param + i_{{name}} * mechanism_stride + i, &value, sizeof(float), cudaMemcpyHostToDevice);
+{%- endif %}
+{%- endfor %}
+    const double delay = delivery_delays[i] == -1.0 ? time_resolution : delivery_delays[i];
+    // NEST-GPU supplies the resolution as float, while JSON delays are doubles.
+    // Compare at GPU precision so e.g. delay=0.1 is accepted for resolution=0.1f.
+    if (!std::isfinite(delay) || static_cast<float>(delay) < static_cast<float>(time_resolution))
+      throw std::runtime_error("Synaptic receptor delay must be at least one timestep");
+    value = static_cast<float>(std::llround(delay / time_resolution));
+    cudaMemcpy(GPU_{{receptor_name}}_vars + i_delivery_delay * mechanism_stride + i, &value, sizeof(float), cudaMemcpyHostToDevice);
+  }
+}
+
+struct {{class_name}}Device
+{
+  static constexpr int i_v_comp = i_{{ receptor_name }}_v_comp;
+  static constexpr int i_s_val = i_{{ receptor_name }}_s_val;
+  static constexpr int i_g_val = i_{{ receptor_name }}_g_val;
+  static constexpr int i_i_val = i_{{ receptor_name }}_i_val;
+  static constexpr int i_i_tot_dv = i_{{ receptor_name }}_i_tot_dv;
+  static constexpr int i_d_i_tot_dv = i_{{ receptor_name }}_d_i_tot_dv;
+
+  float* delayed_spikes;
+  int delay_buffer_size;
+  float* y;
+  float* param;
+  float* population_vars;
+  int* compartment_association;
+  int* receptor_index;
+  int* global_self_spikes;
+  double* global_time_resolution;
+  int mechanism_stride;
+  int population_n_var;
+  int population_n_param;
+  int population_compartment_count;
+  int population_voltage_base_index;
+  std::size_t total_mechanism_count;
+  {%- for ode in conc_dep %}
+  float* dep_{{ode.lhs.name}};
+  {%- endfor %}
+  {%- for inline in rec_dep %}
+  float* dep_{{inline.variable_name}};
+  {%- endfor %}
+  {%- for inline in chan_dep %}
+  float* dep_{{inline.variable_name}};
+  {%- endfor %}
+  {%- for inline in con_in_dep %}
+  float* dep_{{inline.variable_name}};
+  {%- endfor %}
+{%- for function in (receptor_info["Functions"] + synapse_info["Functions"]) %}
+  {{ device_function_declaration.DeviceFunctionDeclaration(function, function.get_name()) }}
+  {
+  {%-   filter indent(4,True) %}
+  {%-   with ast = function.get_stmts_body() %}
+  {%-     set printer = printer_no_origin %}
+  {%-     include "directives_cpp/StmtsBody.jinja2" %}
+  {%-   endwith %}
+  {%-   endfilter %}
+  }
+{%- endfor %}
+{%- set device_black_list = namespace(names=["self_spikes", "__h", "__resolution"]) %}
+{%- for ode in conc_dep %}
+{%- set device_black_list.names = device_black_list.names + [ode.lhs.name] %}
+{%- endfor %}
+{%- for inline in rec_dep %}
+{%- set device_black_list.names = device_black_list.names + [inline.variable_name] %}
+{%- endfor %}
+{%- for inline in chan_dep %}
+{%- set device_black_list.names = device_black_list.names + [inline.variable_name] %}
+{%- endfor %}
+{%- for inline in con_in_dep %}
+{%- set device_black_list.names = device_black_list.names + [inline.variable_name] %}
+{%- endfor %}
+{%- for replacement, expression in receptor_info["cse_function_replacements"].items() %}
+{%- set device_black_list.names = device_black_list.names + [replacement] %}
+{%- endfor %}
+{%- for replacement, expression in receptor_info["cse_body_replacements"].items() %}
+{%- set device_black_list.names = device_black_list.names + [replacement] %}
+{%- endfor %}
+{%- for old_state_name in receptor_info["old_kernel_state_variables"] %}
+{%- set device_black_list.names = device_black_list.names + [old_state_name] %}
+{%- endfor %}
+
+  __device__ __forceinline__
+  void enqueue_spike(std::size_t i, float weight) const
+  {
+    const int neuron = i / mechanism_stride;
+    const int slot = i % mechanism_stride;
+    float* state = y + neuron * population_n_var;
+    const int cursor = static_cast<int>(state[i_delivery_cursor * mechanism_stride + slot]);
+    const int delay = static_cast<int>(state[i_delivery_delay * mechanism_stride + slot]);
+    const int delivery = (cursor + delay - 1) % delay_buffer_size;
+    delayed_spikes[i * delay_buffer_size + delivery] += weight;
+  }
+
+  __device__ __forceinline__
+  void update(std::size_t i) const
+  {
+      const int i_neuron = static_cast<int>(i) / mechanism_stride;
+      const int slot = static_cast<int>(i) % mechanism_stride;
+      if (slot < 0 || slot >= mechanism_stride)
+      {
+        return;
+      }
+      float* y = this->y + i_neuron * population_n_var;
+      float* param = this->param == nullptr ? nullptr : this->param + i_neuron * population_n_param;
+      const double self_spikes = static_cast<double>(global_self_spikes[i_neuron]);
+      const double __h = global_time_resolution[0];
+      const double __resolution = __h;
+      const int comp = compartment_association[i];
+      const int local_comp = comp - i_neuron * population_compartment_count;
+      const int voltage_index =
+        i_neuron * population_n_var + population_voltage_base_index + local_comp;
+      y[i_v_comp*mechanism_stride+slot] = population_vars[voltage_index];
+      {%- for ode in conc_dep %}
+      const double {{ode.lhs.name}} = dep_{{ode.lhs.name}} == nullptr ? 0.0 : dep_{{ode.lhs.name}}[comp];
+      {%- endfor %}
+      {%- for inline in rec_dep %}
+      const double {{inline.variable_name}} = dep_{{inline.variable_name}} == nullptr ? 0.0 : dep_{{inline.variable_name}}[comp];
+      {%- endfor %}
+      {%- for inline in chan_dep %}
+      const double {{inline.variable_name}} = dep_{{inline.variable_name}} == nullptr ? 0.0 : dep_{{inline.variable_name}}[comp];
+      {%- endfor %}
+      {%- for inline in con_in_dep %}
+      const double {{inline.variable_name}} = dep_{{inline.variable_name}} == nullptr ? 0.0 : dep_{{inline.variable_name}}[comp];
+      {%- endfor %}
+      {# CPU compartmental ordering: continuous dynamics, pre-spike handler, trace jumps,
+         then deliver the emitted weight after the receptor's dendritic delay. #}
+      {%- set syn_black_list = device_black_list.names + synapse_info["old_kernel_state_variables"] %}
+      {# Keep dependency states recordable, as in the CPU paired receptor. #}
+      {%- for ode in conc_dep %}
+      {%- if ode.lhs.name in synapse_info["States"] %}
+      y[i_{{ode.lhs.name}}*mechanism_stride+slot] = {{ode.lhs.name}};
+      {%- endif %}
+      {%- endfor %}
+      {%- for kind in ["receptors", "channels", "continuous"] %}
+      {%- for inline in {"receptors": rec_dep, "channels": chan_dep, "continuous": con_in_dep}[kind] %}
+      {%- if inline.variable_name in synapse_info["States"] %}
+      y[i_{{inline.variable_name}}*mechanism_stride+slot] = {{inline.variable_name}};
+      {%- endif %}
+      {%- endfor %}
+      {%- endfor %}
+      {%- for convolution in synapse_info["convolutions"].values() %}
+      {%- for name in convolution["analytic_solution"]["kernel_states"] %}
+      const double old_{{name}} = y[i_{{name}}*mechanism_stride+slot];
+      {%- endfor %}
+      {%- endfor %}
+      {%- for convolution in synapse_info["convolutions"].values() %}
+      {%- for name, state in convolution["analytic_solution"]["kernel_states"].items() %}
+      y[i_{{name}}*mechanism_stride+slot] = {{cuda_printer.print(state["simultaneous_update_expression"], "slot", black_list=syn_black_list, stride="mechanism_stride")}};
+      {%- endfor %}
+      {%- endfor %}
+      {%- for name, inline in synapse_info["Inlines"].items() %}
+      y[i_{{name}}*mechanism_stride+slot] = {{cuda_printer.print(inline["inline_expression"].get_expression(), "slot", black_list=syn_black_list, stride="mechanism_stride")}};
+      {%- endfor %}
+      {%- if synapse_info["UpdateBlock"] %}
+      {%- with ast = synapse_info["UpdateBlock"].get_stmts_body(), gpu_synapse_processing = true,
+                printer = cuda_printer.printer("slot", black_list=syn_black_list, stride="mechanism_stride") %}
+      {%- include "cm_directives_cpp/StmtsBody.jinja2" %}
+      {%- endwith %}
+      {%- endif %}
+      {%- for ode in synapse_info["ODEs"].values() %}
+      {%- for name, propagator in ode["transformed_solutions"][0]["propagators"].items() %}
+      y[i_{{name}}*mechanism_stride+slot] = {{cuda_printer.print(propagator["init_expression"], "slot", black_list=syn_black_list, stride="mechanism_stride")}};
+      {%- endfor %}
+      {%- for name, state in ode["transformed_solutions"][0]["states"].items() %}
+      y[i_{{name}}*mechanism_stride+slot] = {{cuda_printer.print(state["update_expression"], "slot", black_list=syn_black_list, stride="mechanism_stride")}};
+      {%- endfor %}
+      {%- endfor %}
+      if (y[i_s_val*mechanism_stride+slot] != 0.0f)
+      {
+        {%- if synapse_info["PreSpikeFunction"] %}
+        {%- with ast = synapse_info["PreSpikeFunction"].get_stmts_body(), gpu_synapse_processing = true,
+                  printer = cuda_printer.printer("slot", black_list=syn_black_list, stride="mechanism_stride") %}
+        {%- include "cm_directives_cpp/StmtsBody.jinja2" %}
+        {%- endwith %}
+        {%- endif %}
+      }
+      {%- for convolution in synapse_info["convolutions"].values() %}
+      {%- for name, state in convolution["analytic_solution"]["kernel_states"].items() %}
+      y[i_{{name}}*mechanism_stride+slot] += {{"self_spikes" if convolution["post_port"] else "y[i_s_val*mechanism_stride+slot]"}} * {{cuda_printer.print(state["init_expression"], "slot", black_list=syn_black_list, stride="mechanism_stride")}};
+      {%- endfor %}
+      {%- endfor %}
+      const int cursor = static_cast<int>(y[i_delivery_cursor*mechanism_stride+slot]);
+      y[i_s_val*mechanism_stride+slot] = delayed_spikes[i*delay_buffer_size+cursor];
+      delayed_spikes[i*delay_buffer_size+cursor] = 0.0f;
+      y[i_delivery_cursor*mechanism_stride+slot] = (cursor+1) % delay_buffer_size;
+      {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
+      {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items() %}
+      const double old_{{state_variable_name}} = y[i_{{state_variable_name}}*mechanism_stride+slot];
+      {%- endfor %}
+      {%- endfor %}
+      {%- for replacement, expression in receptor_info["cse_function_replacements"].items() %}
+      const double {{ replacement }} = {{ cuda_printer.print(expression, "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
+      {%- endfor %}
+      {%- for replacement, expression in receptor_info["cse_body_replacements"].items() %}
+      const double {{ replacement }} = {{ cuda_printer.print(expression, "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
+      {%- endfor %}
+      {%- for ode_variable, ode_info in receptor_info["ODEs"].items() %}
+          {%- for propagator, propagator_info in ode_info["transformed_solutions"][0]["propagators"].items() %}
+      y[i_{{ propagator }}*mechanism_stride+slot] = {{ cuda_printer.print(propagator_info["init_expression"], "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
+          {%- endfor %}
+          {%- for state, state_solution_info in ode_info["transformed_solutions"][0]["states"].items() %}
+      y[i_{{state}}*mechanism_stride+slot] = {{ cuda_printer.print(state_solution_info["update_expression"], "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
+          {%- endfor %}
+      {%- endfor %}
+
+      // update kernel state variable / compute recaptic conductance
+      {%- for convolution, convolution_info in receptor_info["convolutions"].items() %}
+      {%- for state_variable_name, state_variable_info in convolution_info["analytic_solution"]["kernel_states"].items() %}
+      y[i_{{state_variable_name}}*mechanism_stride+slot] = {{ cuda_printer.print(state_variable_info["simultaneous_update_expression"], "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
+          {%- if convolution_info["spikes"]["name"] == "self_spikes" %}
+      y[i_{{state_variable_name}}*mechanism_stride+slot] += self_spikes * {{ cuda_printer.print(state_variable_info["init_expression"], "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
+          {%- else %}
+      y[i_{{state_variable_name}}*mechanism_stride+slot] += y[i_s_val*mechanism_stride+slot] * {{ cuda_printer.print(state_variable_info["init_expression"], "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
+          {%- endif %}
+      {%- endfor %}
+      {%- endfor %}
+
+      // total current
+      // this expression should be the transformed inline expression
+      y[i_i_tot_{{receptor_name}}*mechanism_stride+slot] = {{ cuda_printer.print(receptor_info["root_expression"], "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
+
+      // derivative of that expression
+      // voltage derivative of total current
+      // compute derivative with respect to current with sympy
+      y[i_d_i_tot_dv*mechanism_stride+slot] = {{ cuda_printer.print(receptor_info["inline_derivative"], "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
+
+      // for numerical integration
+      y[i_g_val*mechanism_stride+slot] = - y[i_d_i_tot_dv*mechanism_stride+slot];
+      y[i_i_val*mechanism_stride+slot] = y[i_i_tot_{{receptor_name}}*mechanism_stride+slot] - y[i_d_i_tot_dv*mechanism_stride+slot] * y[i_v_comp*mechanism_stride+slot];
+  }
+
+  __device__ __forceinline__
+  void update_block(std::size_t i) const
+  {
+      const int i_neuron = static_cast<int>(i) / mechanism_stride;
+      const int slot = static_cast<int>(i) % mechanism_stride;
+      if (slot < 0 || slot >= mechanism_stride)
+      {
+        return;
+      }
+      float* y = this->y + i_neuron * population_n_var;
+      float* param = this->param == nullptr ? nullptr : this->param + i_neuron * population_n_param;
+      const double self_spikes = static_cast<double>(global_self_spikes[i_neuron]);
+      const double __h = global_time_resolution[0];
+      double __resolution = global_time_resolution[0];
+      const int comp = compartment_association[i];
+      {%- for ode in conc_dep %}
+      const double {{ode.lhs.name}} = dep_{{ode.lhs.name}} == nullptr ? 0.0 : dep_{{ode.lhs.name}}[comp];
+      {%- endfor %}
+      {%- for inline in rec_dep %}
+      const double {{inline.variable_name}} = dep_{{inline.variable_name}} == nullptr ? 0.0 : dep_{{inline.variable_name}}[comp];
+      {%- endfor %}
+      {%- for inline in chan_dep %}
+      const double {{inline.variable_name}} = dep_{{inline.variable_name}} == nullptr ? 0.0 : dep_{{inline.variable_name}}[comp];
+      {%- endfor %}
+      {%- for inline in con_in_dep %}
+      const double {{inline.variable_name}} = dep_{{inline.variable_name}} == nullptr ? 0.0 : dep_{{inline.variable_name}}[comp];
+      {%- endfor %}
+    {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["UpdateBlock"] and receptor_info["Blocks"]["UpdateBlock"].get_stmts_body().get_stmts()|length %}
+      {%- set function = receptor_info["Blocks"]["UpdateBlock"] %}
+      {%- filter indent(4, True) %}
+      {%- with ast = function.get_stmts_body() %}
+      {%- set printer = cuda_printer.printer("slot", black_list=device_black_list.names, stride="mechanism_stride") %}
+      {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
+      {%- endwith %}
+      {%- endfilter %}
+    {%- endif %}
+  }
+
+  __device__ __forceinline__
+  void self_spike_block(std::size_t i) const
+  {
+      const int i_neuron = static_cast<int>(i) / mechanism_stride;
+      const int slot = static_cast<int>(i) % mechanism_stride;
+      if (slot < 0 || slot >= mechanism_stride)
+      {
+        return;
+      }
+      float* y = this->y + i_neuron * population_n_var;
+      float* param = this->param == nullptr ? nullptr : this->param + i_neuron * population_n_param;
+      const double self_spikes = static_cast<double>(global_self_spikes[i_neuron]);
+      const double __h = global_time_resolution[0];
+      double __resolution = global_time_resolution[0];
+      const int comp = compartment_association[i];
+      {%- for ode in conc_dep %}
+      const double {{ode.lhs.name}} = dep_{{ode.lhs.name}} == nullptr ? 0.0 : dep_{{ode.lhs.name}}[comp];
+      {%- endfor %}
+      {%- for inline in rec_dep %}
+      const double {{inline.variable_name}} = dep_{{inline.variable_name}} == nullptr ? 0.0 : dep_{{inline.variable_name}}[comp];
+      {%- endfor %}
+      {%- for inline in chan_dep %}
+      const double {{inline.variable_name}} = dep_{{inline.variable_name}} == nullptr ? 0.0 : dep_{{inline.variable_name}}[comp];
+      {%- endfor %}
+      {%- for inline in con_in_dep %}
+      const double {{inline.variable_name}} = dep_{{inline.variable_name}} == nullptr ? 0.0 : dep_{{inline.variable_name}}[comp];
+      {%- endfor %}
+    {%- if synapse_info["PostSpikeFunction"] %}
+      {%- with ast = synapse_info["PostSpikeFunction"].get_stmts_body(), gpu_synapse_processing = true,
+                printer = cuda_printer.printer("slot", black_list=device_black_list.names, stride="mechanism_stride") %}
+      {%- include "cm_directives_cpp/StmtsBody.jinja2" %}
+      {%- endwith %}
+    {%- endif %}
+    {%- if receptor_info["Blocks"] and receptor_info["Blocks"]["SelfSpikesFunction"] and receptor_info["Blocks"]["SelfSpikesFunction"].get_stmts_body().get_stmts()|length %}
+      {%- set function = receptor_info["Blocks"]["SelfSpikesFunction"] %}
+      {%- filter indent(4, True) %}
+      {%- with ast = function.get_stmts_body() %}
+      {%- set printer = cuda_printer.printer("slot", black_list=device_black_list.names, stride="mechanism_stride") %}
+      {%-     include "cm_directives_cpp/StmtsBody.jinja2" %}
+      {%- endwith %}
+      {%- endfilter %}
+    {%- endif %}
+  }
+};
+
+{{class_name}}::~{{class_name}}()
+{
+  delete device_;
+  cudaFree(GPU_compartment_association);
+  cudaFree(GPU_rec_idx);
+  cudaFree(GPU_delayed_spikes);
+}
+
+{{class_name}}Device&
+{{class_name}}::device_view()
+{
+  if (device_ == nullptr)
+  {
+    device_ = new {{class_name}}Device{};
+  }
+
+  device_->delayed_spikes = GPU_delayed_spikes;
+  device_->delay_buffer_size = delay_buffer_size;
+  device_->y = GPU_{{receptor_name}}_vars;
+  device_->param = GPU_{{receptor_name}}_param;
+  device_->population_vars = GPU_population_vars;
+  device_->compartment_association = GPU_compartment_association;
+  device_->receptor_index = GPU_rec_idx;
+  device_->global_self_spikes = GPU_self_spikes;
+  device_->global_time_resolution = GPU_time_resolution;
+  device_->mechanism_stride = mechanism_stride;
+  device_->population_n_var = population_n_var;
+  device_->population_n_param = population_n_param;
+  device_->population_compartment_count = population_compartment_count;
+  device_->population_voltage_base_index = population_voltage_base_index;
+  device_->total_mechanism_count = population_neuron_count * neuron_{{receptor_name}}_receptor_count;
+
+  if (!device_dependencies_bound_)
+  {
+    clear_device_dependencies();
+  }
+
+  return *device_;
+}
+
+void
+{{class_name}}::clear_device_dependencies()
+{
+  if (device_ == nullptr)
+  {
+    device_ = new {{class_name}}Device{};
+  }
+  {%- for ode in conc_dep %}
+  device_->dep_{{ode.lhs.name}} = nullptr;
+  {%- endfor %}
+  {%- for inline in rec_dep %}
+  device_->dep_{{inline.variable_name}} = nullptr;
+  {%- endfor %}
+  {%- for inline in chan_dep %}
+  device_->dep_{{inline.variable_name}} = nullptr;
+  {%- endfor %}
+  {%- for inline in con_in_dep %}
+  device_->dep_{{inline.variable_name}} = nullptr;
+  {%- endfor %}
+  device_dependencies_bound_ = false;
+}
+
+void
+{{class_name}}::bind_device_dependencies({% for ode in conc_dep %}{% if not loop.first %}, {% endif %}float* dep_{{ode.lhs.name}}{% endfor %}{% if conc_dep and (rec_dep or chan_dep or con_in_dep) %}, {% endif %}{% for inline in rec_dep %}{% if not loop.first %}, {% endif %}float* dep_{{inline.variable_name}}{% endfor %}{% if rec_dep and (chan_dep or con_in_dep) %}, {% endif %}{% for inline in chan_dep %}{% if not loop.first %}, {% endif %}float* dep_{{inline.variable_name}}{% endfor %}{% if chan_dep and con_in_dep %}, {% endif %}{% for inline in con_in_dep %}{% if not loop.first %}, {% endif %}float* dep_{{inline.variable_name}}{% endfor %})
+{
+  {{class_name}}Device& device = device_view();
+  {%- for ode in conc_dep %}
+  device.dep_{{ode.lhs.name}} = dep_{{ode.lhs.name}};
+  {%- endfor %}
+  {%- for inline in rec_dep %}
+  device.dep_{{inline.variable_name}} = dep_{{inline.variable_name}};
+  {%- endfor %}
+  {%- for inline in chan_dep %}
+  device.dep_{{inline.variable_name}} = dep_{{inline.variable_name}};
+  {%- endfor %}
+  {%- for inline in con_in_dep %}
+  device.dep_{{inline.variable_name}} = dep_{{inline.variable_name}};
+  {%- endfor %}
+  device_dependencies_bound_ = true;
+}
+
+__global__
+void {{receptor_name}}_device_update({{class_name}}Device device,
+                                     float* port_input_arr,
+                                     int port_input_arr_step,
+                                     int port_input_port_step,
+                                     float* compartment_g,
+                                     float* compartment_i,
+                                     int total_compartment_count)
+{
+  std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < device.total_mechanism_count)
+  {
+      const int i_neuron = static_cast<int>(i) / device.mechanism_stride;
+      const int slot = static_cast<int>(i) % device.mechanism_stride;
+      float* y = device.y + i_neuron * device.population_n_var;
+      float input_value = 0.0f;
+      if (port_input_arr != nullptr)
+      {
+        const int receptor = device.receptor_index[i];
+        if (receptor >= 0)
+        {
+          float* input = port_input_arr + i_neuron * port_input_arr_step + receptor * port_input_port_step;
+          input_value = *input;
+          *input = 0.0f;
+        }
+      }
+      y[device.i_s_val * device.mechanism_stride + slot] = input_value;
+      device.update(i);
+      device.update_block(i);
+      const int compartment = device.compartment_association[i];
+      if (compartment >= 0 && compartment < total_compartment_count)
+      {
+        atomicAdd(compartment_g + compartment, y[device.i_g_val * device.mechanism_stride + slot]);
+        atomicAdd(compartment_i + compartment, y[device.i_i_val * device.mechanism_stride + slot]);
+      }
+  }
+}
+
+__global__
+void {{receptor_name}}_device_self_spike_block({{class_name}}Device device)
+{
+  std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < device.total_mechanism_count
+      && device.global_self_spikes[i / device.mechanism_stride])
+  {
+      device.self_spike_block(i);
+  }
+}
+
+__global__
+void {{receptor_name}}_aggregate_total_current_kernel({{class_name}}Device device,
+                                                     float* compartment_current,
+                                                     int compartment_count)
+{
+  const std::size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < device.total_mechanism_count)
+  {
+    const int i_neuron = static_cast<int>(i) / device.mechanism_stride;
+    const int slot = static_cast<int>(i) % device.mechanism_stride;
+    const float* y = device.y + i_neuron * device.population_n_var;
+    const int compartment = device.compartment_association[i];
+    if (compartment >= 0 && compartment < compartment_count)
+    {
+      atomicAdd(compartment_current + compartment,
+                y[i_i_tot_{{receptor_name}} * device.mechanism_stride + slot]);
+    }
+  }
+}
+
+void {{class_name}}::configure_population(
+  float* var_arr,
+  float* param_arr,
+  int n_var,
+  int n_param,
+  int neuron_count,
+  int compartment_count,
+  int compartment_voltage_base_index,
+  int mechanism_count,
+  int mechanism_var_base_index,
+  int mechanism_param_base_index,
+  const std::vector<int>& global_compartment_association,
+  const std::vector<int>& receptor_indices,
+  int* global_self_spikes,
+  double* global_time_resolution)
+{
+  population_neuron_count = neuron_count;
+  population_n_var = n_var;
+  population_n_param = n_param;
+  population_compartment_count = compartment_count;
+  population_voltage_base_index = compartment_voltage_base_index;
+  mechanism_stride = mechanism_count;
+  neuron_{{receptor_name}}_receptor_count = mechanism_count;
+  var_base_index = mechanism_var_base_index;
+  param_base_index = mechanism_param_base_index;
+  GPU_population_vars = var_arr;
+  GPU_{{receptor_name}}_vars = var_arr == nullptr ? nullptr : var_arr + var_base_index;
+  GPU_{{receptor_name}}_param = param_arr == nullptr ? nullptr : param_arr + param_base_index;
+  GPU_self_spikes = global_self_spikes;
+  GPU_time_resolution = global_time_resolution;
+
+  cudaFree(GPU_compartment_association);
+  cudaFree(GPU_rec_idx);
+  GPU_compartment_association = nullptr;
+  GPU_rec_idx = nullptr;
+  cudaFree(GPU_delayed_spikes);
+  GPU_delayed_spikes = nullptr;
+  delay_buffer_size = 1;
+  for (int neuron = 0; neuron < neuron_count; ++neuron)
+  {
+    std::vector<float> delays(mechanism_count);
+    if (mechanism_count)
+      cudaMemcpy(delays.data(), GPU_{{receptor_name}}_vars + neuron * n_var + i_delivery_delay * mechanism_count,
+                 mechanism_count * sizeof(float), cudaMemcpyDeviceToHost);
+    for (float delay : delays) delay_buffer_size = std::max(delay_buffer_size, static_cast<int>(delay));
+  }
+  if (!global_compartment_association.empty())
+  {
+    const std::size_t bytes = global_compartment_association.size() * delay_buffer_size * sizeof(float);
+    cudaMalloc(&GPU_delayed_spikes, bytes);
+    cudaMemset(GPU_delayed_spikes, 0, bytes);
+  }
+  const std::size_t total_count = global_compartment_association.size();
+  if (total_count > 0)
+  {
+    cudaMalloc(&GPU_compartment_association, total_count * sizeof(int));
+    cudaMemcpy(GPU_compartment_association,
+               global_compartment_association.data(),
+               total_count * sizeof(int),
+               cudaMemcpyHostToDevice);
+    cudaMalloc(&GPU_rec_idx, total_count * sizeof(int));
+    cudaMemcpy(GPU_rec_idx,
+               receptor_indices.data(),
+               total_count * sizeof(int),
+               cudaMemcpyHostToDevice);
+  }
+}
+
+void {{class_name}}::f_numstep_device(float* /*shared_v_comp*/, float* compartment_g, float* compartment_i, int total_compartment_count, long /*lag*/, float* port_input_arr, int port_input_arr_step, int port_input_port_step{% for ode in conc_dep %}, float* dep_{{ode.lhs.name}}{% endfor %}{% for inline in rec_dep %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in chan_dep %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in con_in_dep %}, float* dep_{{inline.variable_name}}{% endfor %}, cudaStream_t stream)
+{
+  if (neuron_{{ receptor_name }}_receptor_count == 0)
+  {
+    return;
+  }
+
+  const int threads_per_block = 256;
+  const std::size_t total_count = population_neuron_count * neuron_{{receptor_name}}_receptor_count;
+  const int blocks = (total_count + threads_per_block - 1) / threads_per_block;
+
+  bind_device_dependencies({% for ode in conc_dep %}{% if not loop.first %}, {% endif %}dep_{{ode.lhs.name}}{% endfor %}{% if conc_dep and (rec_dep or chan_dep or con_in_dep) %}, {% endif %}{% for inline in rec_dep %}{% if not loop.first %}, {% endif %}dep_{{inline.variable_name}}{% endfor %}{% if rec_dep and (chan_dep or con_in_dep) %}, {% endif %}{% for inline in chan_dep %}{% if not loop.first %}, {% endif %}dep_{{inline.variable_name}}{% endfor %}{% if chan_dep and con_in_dep %}, {% endif %}{% for inline in con_in_dep %}{% if not loop.first %}, {% endif %}dep_{{inline.variable_name}}{% endfor %});
+  {{class_name}}Device& device = device_view();
+  {{receptor_name}}_device_update<<<blocks, threads_per_block, 0, stream>>>(device,
+                                                                port_input_arr,
+                                                                port_input_arr_step,
+                                                                port_input_port_step,
+                                                                compartment_g,
+                                                                compartment_i,
+                                                                total_compartment_count);
+}
+
+void {{class_name}}::add_total_current_to_device(float* compartment_current, int compartment_count, cudaStream_t stream) const
+{
+  if (neuron_{{ receptor_name }}_receptor_count == 0)
+  {
+    return;
+  }
+  const int threads_per_block = 256;
+  const std::size_t total_count = population_neuron_count * neuron_{{receptor_name}}_receptor_count;
+  const int blocks = (total_count + threads_per_block - 1) / threads_per_block;
+  {{class_name}}Device& device = const_cast<{{class_name}}*>(this)->device_view();
+  {{receptor_name}}_aggregate_total_current_kernel<<<blocks, threads_per_block, 0, stream>>>(device,
+                                                                                compartment_current,
+                                                                                compartment_count);
+}
+
+void {{class_name}}::f_self_spike(cudaStream_t stream)
+{
+  if (neuron_{{ receptor_name }}_receptor_count == 0)
+  {
+    return;
+  }
+  const int threads_per_block = 256;
+  const std::size_t total_count = population_neuron_count * neuron_{{receptor_name}}_receptor_count;
+  const int blocks = (total_count + threads_per_block - 1) / threads_per_block;
+  {{class_name}}Device& device = device_view();
+  {{receptor_name}}_device_self_spike_block<<<blocks, threads_per_block, 0, stream>>>(device);
+
+}
+{%- for function in (receptor_info["Functions"] + synapse_info["Functions"]) %}
+inline {{ function_declaration.FunctionDeclaration(function, class_name~"::", true) }}
+{
+{%-   filter indent(2,True) %}
+{%-   with ast = function.get_stmts_body() %}
+{%-     set printer = printer_no_origin %}
+{%-     include "directives_cpp/StmtsBody.jinja2" %}
+{%-   endwith %}
+{%-   endfilter %}
+}
+{%- endfor %}
+
+
+} // paired receptor and synapse
+{%- endfor %}
+{%- endfor %}

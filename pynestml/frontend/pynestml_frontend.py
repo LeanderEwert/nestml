@@ -98,7 +98,7 @@ def transformers_from_target_name(target_name: str, options: Optional[Mapping[st
         options = transformer.set_options(options)
         transformers.append(transformer)
 
-    if target_name.upper() not in ["NEST_COMPARTMENTAL"]:
+    if target_name.upper() not in ["NEST_COMPARTMENTAL", "NEST_GPU_COMPARTMENTAL"]:
         # ConvolutionsToBuffersTransformer
         from pynestml.transformers.convolutions_to_buffers_transformer import ConvolutionsToBuffersTransformer
         transformer = ConvolutionsToBuffersTransformer()

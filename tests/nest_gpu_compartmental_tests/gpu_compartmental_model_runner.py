@@ -9,6 +9,7 @@
 # the Free Software Foundation, either version 2 of the License, or
 # (at your option) any later version.
 
+import ctypes
 import json
 import sys
 import time
@@ -79,13 +80,42 @@ ACTIVE_RECORDABLES = [
 ]
 
 
-def _active_recordables_for_compartment(compartment):
-    return [
-        f"v_comp{compartment}",
-        f"m_Na{compartment}",
-        f"h_Na{compartment}",
-        f"n_K{compartment}",
-    ]
+def benchmark_neuron_configuration(n_added_compartments, morphology="chain", dynamics="active"):
+    """Shared CPU/GPU sweep configuration: uniform dynamics and somatic AMPA."""
+    if n_added_compartments < 0 or morphology not in ("chain", "star") or dynamics not in ("active", "passive"):
+        raise ValueError("Invalid benchmark morphology or dynamics")
+    soma = dict(SOMA_PARAMS if dynamics == "active" else SOMA_PARAMS_PASSIVE)
+    dendrite = dict(DEND_PARAMS_ACTIVE if dynamics == "active" else DEND_PARAMS_PASSIVE)
+    for params in (soma, dendrite):
+        params["v_comp"] = -75.0
+        if dynamics == "passive":
+            params.update({"gbar_Na": 0.0, "gbar_K": 0.0})
+    return {
+        "V_th": -50.0,
+        "compartments": [{"parent_idx": -1, "params": soma}] + [
+            {"parent_idx": index - 1 if morphology == "chain" else 0, "params": dict(dendrite)}
+            for index in range(1, n_added_compartments + 1)],
+        "receptors": [{"comp_idx": 0, "receptor_type": "AMPA",
+                       "params": {"e_AMPA": 0.0, "tau_r_AMPA": 0.2, "tau_d_AMPA": 3.0}}],
+    }
+
+
+def _synchronize(ngpu):
+    library = ctypes.CDLL(ngpu.lib_path)
+    synchronize = library.cudaDeviceSynchronize
+    synchronize.restype = ctypes.c_int
+    synchronize.argtypes = []
+    if synchronize():
+        raise RuntimeError("CUDA synchronization failed")
+
+
+def _check_benchmark_mechanisms(ngpu, neuron, n_compartments, dynamics):
+    # Runtime names enumerate instantiated mechanisms, including unrecorded ones.
+    names = [name.decode() if isinstance(name, bytes) else name for name in ngpu.GetScalVarNames(neuron)]
+    expected = n_compartments if dynamics == "active" else 0
+    for gate in ("m_Na", "h_Na", "n_K"):
+        assert sum(name.startswith(gate) for name in names) == expected, (gate, dynamics)
+    assert not any("NMDA" in name for name in names)
 
 
 def _configure_default_neuron(ngpu, neuron, dend_params):
@@ -98,37 +128,6 @@ def _configure_default_neuron(ngpu, neuron, dend_params):
         "receptors": [
             {"comp_idx": 0, "receptor_type": "AMPA_NMDA"},
             {"comp_idx": 1, "receptor_type": "AMPA_NMDA"},
-        ],
-    })
-
-
-def _configure_active_compartment_chain(ngpu, neuron, n_added_compartments):
-    n_compartments = n_added_compartments + 1
-    compartments = [{"parent_idx": -1, "params": SOMA_PARAMS}]
-    for compartment in range(1, n_compartments):
-        compartments.append({"parent_idx": compartment - 1, "params": DEND_PARAMS_ACTIVE})
-
-    ngpu.SetStatus(neuron, {
-        "V_th": -50.0,
-        "compartments": compartments,
-        "receptors": [
-            {"comp_idx": 0, "receptor_type": "AMPA_NMDA"},
-        ],
-    })
-
-
-def _configure_passive_compartment_star(ngpu, neuron, n_added_compartments):
-    compartments = [{"parent_idx": -1, "params": SOMA_PARAMS_PASSIVE}]
-    compartments.extend(
-        {"parent_idx": 0, "params": DEND_PARAMS_PASSIVE}
-        for _ in range(n_added_compartments)
-    )
-
-    ngpu.SetStatus(neuron, {
-        "V_th": -50.0,
-        "compartments": compartments,
-        "receptors": [
-            {"comp_idx": 0, "receptor_type": "AMPA"},
         ],
     })
 
@@ -187,70 +186,68 @@ def run_default_simulation():
     }
 
 
-def run_active_population_simulation(n_neurons, sample_neuron, record=True):
+def run_active_population_simulation(n_neurons, sample_neuron, record=True, dynamics="active"):
     import nestgpu as ngpu
 
     if sample_neuron < 0 or sample_neuron >= n_neurons:
         raise ValueError("sample_neuron must be inside the created population")
 
-    t_start = time.perf_counter()
     ngpu.SetTimeResolution(DEFAULT_DT)
+    _synchronize(ngpu)
+    t_start = time.perf_counter()
 
     neurons = ngpu.Create(DEFAULT_MODEL_NAME, n_neurons)
     for i_neuron in range(n_neurons):
-        _configure_default_neuron(ngpu, neurons[i_neuron:i_neuron + 1], DEND_PARAMS_ACTIVE)
+        ngpu.SetStatus(neurons[i_neuron:i_neuron + 1], benchmark_neuron_configuration(1, dynamics=dynamics))
 
+    recordables = ["v_comp0", "v_comp1"]
     if record:
-        recorder = ngpu.CreateRecord("", ACTIVE_RECORDABLES,
-                                     [neurons[sample_neuron]] * len(ACTIVE_RECORDABLES),
-                                     [0] * len(ACTIVE_RECORDABLES))
+        recorder = ngpu.CreateRecord("", recordables,
+                                     [neurons[sample_neuron]] * len(recordables), [0] * len(recordables))
 
     sg_soma = ngpu.Create("spike_generator", n_neurons)
-    sg_dend = ngpu.Create("spike_generator", n_neurons)
-    ngpu.SetStatus(sg_soma, {"spike_times": [10.0, 13.0, 16.0]})
-    ngpu.SetStatus(sg_dend, {"spike_times": [70.0, 73.0, 76.0]})
+    ngpu.SetStatus(sg_soma, {"spike_times": COMPARTMENT_BENCHMARK_SPIKE_TIMES})
 
     conn_dict = {"rule": "one_to_one"}
     ngpu.Connect(sg_soma, neurons, conn_dict, {"weight": 5.0, "delay": 0.5, "receptor": 0})
-    ngpu.Connect(sg_dend, neurons, conn_dict, {"weight": 2.0, "delay": 0.5, "receptor": 1})
 
     ngpu.Simulate(DEFAULT_SIM_TIME)
 
-    recorded_data = ngpu.GetRecordData(recorder) if record else None
+    _synchronize(ngpu)
     runtime = time.perf_counter() - t_start
+    _check_benchmark_mechanisms(ngpu, neurons[0], 2, dynamics)
+    recorded_data = ngpu.GetRecordData(recorder) if record else None
 
     result = {
         "n_neurons": n_neurons,
         "sample_neuron": sample_neuron,
         "recording_enabled": record,
+        "dynamics": dynamics,
         "runtime": runtime,
     }
     if record:
-        _assert_record_data(recorded_data, ACTIVE_RECORDABLES)
-        result["active"] = _record_data_to_dict(recorded_data, ACTIVE_RECORDABLES)
+        _assert_record_data(recorded_data, recordables)
+        result["traces"] = _record_data_to_dict(recorded_data, recordables)
     return result
 
 
-def run_active_compartment_simulation(n_added_compartments, sample_compartment, record=True, morphology="chain"):
+def run_active_compartment_simulation(
+        n_added_compartments, sample_compartment, record=True, morphology="chain", dynamics=None):
     import nestgpu as ngpu
 
     n_compartments = n_added_compartments + 1
     if sample_compartment < 0 or sample_compartment >= n_compartments:
         raise ValueError("sample_compartment must be inside the created morphology")
 
-    recordables = ([f"v_comp{sample_compartment}"] if morphology == "star"
-                   else _active_recordables_for_compartment(sample_compartment))
+    dynamics = dynamics or ("passive" if morphology == "star" else "active")
+    recordables = [f"v_comp{sample_compartment}"]
 
-    t_start = time.perf_counter()
     ngpu.SetTimeResolution(DEFAULT_DT)
+    _synchronize(ngpu)
+    t_start = time.perf_counter()
 
     neuron = ngpu.Create(DEFAULT_MODEL_NAME, 1)
-    if morphology == "chain":
-        _configure_active_compartment_chain(ngpu, neuron, n_added_compartments)
-    elif morphology == "star":
-        _configure_passive_compartment_star(ngpu, neuron, n_added_compartments)
-    else:
-        raise ValueError(f"Unknown compartment morphology: {morphology}")
+    ngpu.SetStatus(neuron, benchmark_neuron_configuration(n_added_compartments, morphology, dynamics))
 
     if record:
         recorder = ngpu.CreateRecord("", recordables, [neuron[0]] * len(recordables), [0] * len(recordables))
@@ -263,78 +260,48 @@ def run_active_compartment_simulation(n_added_compartments, sample_compartment, 
 
     ngpu.Simulate(DEFAULT_SIM_TIME)
 
-    recorded_data = ngpu.GetRecordData(recorder) if record else None
+    _synchronize(ngpu)
     runtime = time.perf_counter() - t_start
+    _check_benchmark_mechanisms(ngpu, neuron[0], n_compartments, dynamics)
+    recorded_data = ngpu.GetRecordData(recorder) if record else None
 
     result = {
         "n_added_compartments": n_added_compartments,
         "n_compartments": n_compartments,
         "sample_compartment": sample_compartment,
         "morphology": morphology,
+        "dynamics": dynamics,
         "recording_enabled": record,
         "runtime": runtime,
     }
     if record:
         _assert_record_data(recorded_data, recordables)
-        result["active"] = _record_data_to_dict(recorded_data, recordables)
+        result["traces"] = _record_data_to_dict(recorded_data, recordables)
     return result
 
 
 if __name__ == "__main__":
-    if len(sys.argv) not in (3, 5):
-        raise SystemExit(
-            "usage: gpu_compartmental_model_runner.py "
-            "[default-json|active-population-json|active-population-no-record-json|"
-            "active-compartment-json|active-compartment-no-record-json|"
-            "passive-star-compartment-json|passive-star-compartment-no-record-json] "
-            "output.json [size sample_index]")
-
-    if sys.argv[1] == "default-json":
-        if len(sys.argv) != 3:
-            raise SystemExit("default-json requires an output path")
-        with open(sys.argv[2], "w", encoding="utf-8") as output_file:
-            json.dump(run_default_simulation(), output_file)
-    elif sys.argv[1] == "active-population-json":
-        if len(sys.argv) != 5:
-            raise SystemExit("active-population-json requires output path, n_neurons, and sample_neuron")
-        with open(sys.argv[2], "w", encoding="utf-8") as output_file:
-            json.dump(run_active_population_simulation(int(sys.argv[3]), int(sys.argv[4])), output_file)
-    elif sys.argv[1] == "active-population-no-record-json":
-        if len(sys.argv) != 5:
-            raise SystemExit(
-                "active-population-no-record-json requires output path, n_neurons, and sample_neuron")
-        with open(sys.argv[2], "w", encoding="utf-8") as output_file:
-            json.dump(run_active_population_simulation(int(sys.argv[3]), int(sys.argv[4]), record=False),
-                      output_file)
-    elif sys.argv[1] == "active-compartment-json":
-        if len(sys.argv) != 5:
-            raise SystemExit(
-                "active-compartment-json requires output path, n_added_compartments, and sample_compartment")
-        with open(sys.argv[2], "w", encoding="utf-8") as output_file:
-            json.dump(run_active_compartment_simulation(int(sys.argv[3]), int(sys.argv[4])), output_file)
-    elif sys.argv[1] == "active-compartment-no-record-json":
-        if len(sys.argv) != 5:
-            raise SystemExit(
-                "active-compartment-no-record-json requires output path, n_added_compartments, and "
-                "sample_compartment")
-        with open(sys.argv[2], "w", encoding="utf-8") as output_file:
-            json.dump(run_active_compartment_simulation(int(sys.argv[3]), int(sys.argv[4]), record=False),
-                      output_file)
-    elif sys.argv[1] == "passive-star-compartment-json":
-        if len(sys.argv) != 5:
-            raise SystemExit(
-                "passive-star-compartment-json requires output path, n_added_compartments, and "
-                "sample_compartment")
-        with open(sys.argv[2], "w", encoding="utf-8") as output_file:
-            json.dump(run_active_compartment_simulation(
-                int(sys.argv[3]), int(sys.argv[4]), morphology="star"), output_file)
-    elif sys.argv[1] == "passive-star-compartment-no-record-json":
-        if len(sys.argv) != 5:
-            raise SystemExit(
-                "passive-star-compartment-no-record-json requires output path, n_added_compartments, and "
-                "sample_compartment")
-        with open(sys.argv[2], "w", encoding="utf-8") as output_file:
-            json.dump(run_active_compartment_simulation(
-                int(sys.argv[3]), int(sys.argv[4]), record=False, morphology="star"), output_file)
+    # Retain the existing commands and extend them symmetrically to both dynamics.
+    modes = {}
+    for dynamics in ("active", "passive"):
+        for record in (True, False):
+            suffix = "json" if record else "no-record-json"
+            modes[f"{dynamics}-population-{suffix}"] = ("population", dynamics, record)
+            modes[f"{dynamics}-compartment-{suffix}"] = ("chain", dynamics, record)
+            modes[f"{dynamics}-star-compartment-{suffix}"] = ("star", dynamics, record)
+    if len(sys.argv) == 3 and sys.argv[1] == "default-json":
+        result = run_default_simulation()
+    elif len(sys.argv) == 5 and sys.argv[1] in modes:
+        morphology, dynamics, record = modes[sys.argv[1]]
+        size, sample = int(sys.argv[3]), int(sys.argv[4])
+        if morphology == "population":
+            result = run_active_population_simulation(size, sample, record=record, dynamics=dynamics)
+        else:
+            result = run_active_compartment_simulation(
+                size, sample, record=record, morphology=morphology, dynamics=dynamics)
     else:
-        raise SystemExit("unknown model runner command: " + sys.argv[1])
+        raise SystemExit("usage: gpu_compartmental_model_runner.py default-json output.json OR "
+                         "<active|passive>-<population|compartment|star-compartment>-"
+                         "<json|no-record-json> output.json size sample_index")
+    with open(sys.argv[2], "w", encoding="utf-8") as output_file:
+        json.dump(result, output_file)

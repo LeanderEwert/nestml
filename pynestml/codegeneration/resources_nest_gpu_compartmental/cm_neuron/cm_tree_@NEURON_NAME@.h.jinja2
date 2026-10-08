@@ -154,11 +154,13 @@ private:
   bool base_arrays_initialized_ = false;
   bool device_tree_initialized_ = false;
   int population_neuron_count_ = 0;
+  int population_first_node_ = 0;
   int population_compartment_count_ = 0;
   int population_n_var_ = 0;
   int compartment_voltage_base_index_ = 0;
   float* GPU_thresholds = nullptr;
   int* GPU_population_self_spikes = nullptr;
+  bool* GPU_population_above_threshold = nullptr;
   double* GPU_population_time_resolution = nullptr;
 
   cudaStream_t update_graph_capture_stream_ = nullptr;
@@ -178,6 +180,7 @@ private:
 
   void destroy_update_graph();
   void enqueue_matrix_solve(cudaStream_t stream);
+  void enqueue_spike_emission(cudaStream_t stream);
   void enqueue_population_update(float* port_input_arr,
                                  int port_input_arr_step,
                                  int port_input_port_step,
@@ -204,7 +207,8 @@ public:
                                      int n_var,
                                      int n_param,
                                      const std::vector<float>& thresholds,
-                                     double time_resolution);
+                                     double time_resolution,
+                                     int first_node);
 
   void init_base_arrays(float* var_arr, int n_var, int i_neuron, int base_index);
   // get a compartment pointer from the tree

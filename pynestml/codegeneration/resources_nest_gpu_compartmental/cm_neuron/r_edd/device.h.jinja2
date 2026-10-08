@@ -1,0 +1,105 @@
+/* This file is part of NEST. Copyright (C) 2004 The NEST Initiative.
+ * Licensed under the GNU General Public License, version 2 or later.
+ */
+#include <cuda_runtime.h>
+#include <memory>
+#include <string>
+#include <utility>
+{% include 'r_edd/plan.h.jinja2' %}
+{% include 'r_edd/numerics.h.jinja2' %}
+
+namespace cm_r_edd{{cm_unique_suffix}}
+{
+inline void check_cuda(cudaError_t status)
+{
+  if (status != cudaSuccess)
+  {
+    throw std::runtime_error(std::string("R-EDD CUDA error: ") + cudaGetErrorString(status));
+  }
+}
+
+template<typename T> struct DeviceBuffer
+{
+  T* data = nullptr;
+  DeviceBuffer() = default;
+  DeviceBuffer(const DeviceBuffer&) = delete;
+  DeviceBuffer& operator=(const DeviceBuffer&) = delete;
+  ~DeviceBuffer() { cudaFree(data); }
+
+  void allocate(size_t size)
+  {
+    if (size > 0)
+    {
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&data), size * sizeof(T)));
+    }
+  }
+  void upload(const std::vector<T>& values)
+  {
+    allocate(values.size());
+    if (!values.empty())
+    {
+      check_cuda(cudaMemcpy(data, values.data(), values.size() * sizeof(T), cudaMemcpyHostToDevice));
+    }
+  }
+};
+
+struct DeviceLevel
+{
+  DeviceBuffer<int> parent, tree_offsets, junctions;
+  DeviceBuffer<int> chain_offsets, chain_nodes, chain_upper, chain_lower;
+  DeviceBuffer<int> incident_offsets, incident_chains, parent_chain;
+  DeviceBuffer<float> diagonal, rhs, coupling, upper_response, lower_response;
+  int size, trees, chains, junction_count;
+
+  explicit DeviceLevel(const LevelPlan& plan)
+    : size(static_cast<int>(plan.parent.size()))
+    , trees(static_cast<int>(plan.tree_offsets.size()) - 1)
+    , chains(static_cast<int>(plan.chain_upper.size()))
+    , junction_count(static_cast<int>(plan.junctions.size()))
+  {
+    parent.upload(plan.parent);
+    tree_offsets.upload(plan.tree_offsets);
+    junctions.upload(plan.junctions);
+    chain_offsets.upload(plan.chain_offsets);
+    chain_nodes.upload(plan.chain_nodes);
+    chain_upper.upload(plan.chain_upper);
+    chain_lower.upload(plan.chain_lower);
+    incident_offsets.upload(plan.incident_offsets);
+    incident_chains.upload(plan.incident_chains);
+    parent_chain.upload(plan.parent_chain);
+    diagonal.allocate(size);
+    rhs.allocate(size);
+    coupling.allocate(size);
+    if (chains > 0)
+    {
+      upper_response.allocate(size);
+      lower_response.allocate(size);
+    }
+  }
+
+  LevelView view() const
+  {
+    return {parent.data, tree_offsets.data, junctions.data,
+            chain_offsets.data, chain_nodes.data, chain_upper.data, chain_lower.data,
+            incident_offsets.data, incident_chains.data, parent_chain.data,
+            diagonal.data, rhs.data, coupling.data, upper_response.data, lower_response.data};
+  }
+};
+
+class Solver
+{
+public:
+  void initialize(const std::vector<int>& parents, const std::vector<int>& child_offsets,
+                  const std::vector<int>& child_indices, const std::vector<float>& coupling,
+                  int compartments_per_neuron);
+  void solve(const float* diagonal, const float* rhs, float* population_vars,
+             int n_var, int voltage_base, const float* thresholds, int* self_spikes,
+             bool* above_threshold,
+             cudaStream_t stream);
+
+private:
+  DeviceBuffer<int> permutation_;
+  std::vector<std::unique_ptr<DeviceLevel>> levels_;
+  int compartments_per_neuron_ = 0;
+};
+}

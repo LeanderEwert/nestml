@@ -268,4 +268,209 @@ public:
 {% endfor %}
 {% endwith -%}
 
+
+////////////////////////////////////// receptors with synapses attached
+{%- for synapse_name, synapse_info in syns_info.items() %}
+{%- for receptor_name, receptor_info in recs_info.items() %}
+{%- set class_name = receptor_name ~ cm_unique_suffix ~ "_con_" ~ synapse_name %}
+{%- set conc_dep = set(receptor_info["Dependencies"]["concentrations"]).union(synapse_info["Dependencies"]["concentrations"]) | sort(attribute="lhs.name") %}
+{%- set rec_dep = set(receptor_info["Dependencies"]["receptors"]).union(synapse_info["Dependencies"]["receptors"]) | sort(attribute="variable_name") %}
+{%- set chan_dep = set(receptor_info["Dependencies"]["channels"]).union(synapse_info["Dependencies"]["channels"]) | sort(attribute="variable_name") %}
+{%- set con_in_dep = set(receptor_info["Dependencies"]["continuous"]).union(synapse_info["Dependencies"]["continuous"]) | sort(attribute="variable_name") %}
+// Keep indices local to this pair: different synapse models can both define w, etc.
+namespace paired_{{receptor_name}}{{cm_unique_suffix}}_{{synapse_name}} {
+enum {{ receptor_name }}VarIndexes
+{
+  {%- for mechanism_info in [receptor_info, synapse_info] %}
+{%- for name, state_info in mechanism_info["States"].items() %}
+  i_{{name}},
+{%- endfor %}
+{%- for convolution_info in mechanism_info["convolutions"].values() %}
+{%- for name in convolution_info["analytic_solution"]["propagators"] %}
+  i_{{name}},
+{%- endfor %}
+{%- for name in convolution_info["analytic_solution"]["kernel_states"] %}
+  i_{{name}},
+{%- endfor %}
+{%- endfor %}
+{%- for ode_info in mechanism_info["ODEs"].values() %}
+{%- for name in ode_info["transformed_solutions"][0]["propagators"] %}
+  i_{{name}},
+{%- endfor %}
+{%- endfor %}
+{%- endfor %}
+{%- for name in synapse_info["Inlines"] %}
+  i_{{name}},
+{%- endfor %}
+{%- for declaration in synapse_info["InFunctionDeclarationsVars"] %}
+{%- for variable in declaration.get_variables() %}
+{%- set name = variable.name %}
+  i_{{name}},
+{%- endfor %}
+{%- endfor %}
+  i_{{ receptor_name }}_v_comp,
+  i_{{ receptor_name }}_s_val,
+  i_i_tot_{{ receptor_name }},
+  i_{{ receptor_name }}_g_val,
+  i_{{ receptor_name }}_i_val,
+  i_{{ receptor_name }}_i_tot_dv,
+  i_{{ receptor_name }}_d_i_tot_dv,
+  i_delivery_delay, i_delivery_cursor,
+  N_{{ receptor_name }}_VARS
+};
+enum {{ receptor_name }}ParamIndexes
+{
+  {%- for mechanism_info in [receptor_info, synapse_info] %}
+{%- for name, parameter_info in mechanism_info["Parameters"].items() %}
+  i_{{name}},
+{%- endfor %}
+{%- endfor %}
+  {%- for name, declaration in receptor_info["internals_used_declared"] %}
+  i_{{name}},
+{%- endfor %}
+{%- for name, internal_info in synapse_info["Internals"].items() %}
+{%- if name != "__h" and not name.startswith("__P__") %}
+  i_{{name}},
+{%- endif %}
+{%- endfor %}
+  N_{{ receptor_name }}_PARAM
+};
+
+struct {{class_name}}Device;
+
+class {{class_name}}{
+private:
+  static constexpr int i_v_comp = i_{{ receptor_name }}_v_comp;
+  static constexpr int i_s_val = i_{{ receptor_name }}_s_val;
+  static constexpr int i_g_val = i_{{ receptor_name }}_g_val;
+  static constexpr int i_i_val = i_{{ receptor_name }}_i_val;
+  static constexpr int i_i_tot_dv = i_{{ receptor_name }}_i_tot_dv;
+  static constexpr int i_d_i_tot_dv = i_{{ receptor_name }}_d_i_tot_dv;
+
+  // global receptor index
+  std::vector< long > rec_idx = {};
+  {%- for mechanism_info in [receptor_info, synapse_info] %}
+{%- for name, state_info in mechanism_info["States"].items() %}
+  std::vector<double> {{name}};
+{%- endfor %}
+{%- for convolution_info in mechanism_info["convolutions"].values() %}
+{%- for name in convolution_info["analytic_solution"]["propagators"] %}
+  std::vector<double> {{name}};
+{%- endfor %}
+{%- for name in convolution_info["analytic_solution"]["kernel_states"] %}
+  std::vector<double> {{name}};
+{%- endfor %}
+{%- endfor %}
+{%- for ode_info in mechanism_info["ODEs"].values() %}
+{%- for name in ode_info["transformed_solutions"][0]["propagators"] %}
+  std::vector<double> {{name}};
+{%- endfor %}
+{%- endfor %}
+{%- endfor %}
+{%- for name in synapse_info["Inlines"] %}
+  std::vector<double> {{name}};
+{%- endfor %}
+{%- for declaration in synapse_info["InFunctionDeclarationsVars"] %}
+{%- for variable in declaration.get_variables() %}
+{%- set name = variable.name %}
+  std::vector<double> {{name}};
+{%- endfor %}
+{%- endfor %}
+  {%- for mechanism_info in [receptor_info, synapse_info] %}
+{%- for name, parameter_info in mechanism_info["Parameters"].items() %}
+  std::vector<double> {{name}};
+{%- endfor %}
+{%- endfor %}
+  {%- for name, declaration in receptor_info["internals_used_declared"] %}
+  std::vector<double> {{name}};
+{%- endfor %}
+{%- for name, internal_info in synapse_info["Internals"].items() %}
+{%- if name != "__h" and not name.startswith("__P__") %}
+  std::vector<double> {{name}};
+{%- endif %}
+{%- endfor %}
+  float* GPU_{{receptor_name}}_vars = nullptr;
+  float* GPU_{{receptor_name}}_param = nullptr;
+  int* GPU_compartment_association = nullptr;
+  int* GPU_rec_idx = nullptr;
+  int* GPU_self_spikes = nullptr;
+  double* GPU_time_resolution = nullptr;
+  int mechanism_stride = 0;
+  int population_neuron_count = 1;
+  int population_n_var = 0;
+  int population_n_param = 0;
+  int population_compartment_count = 0;
+  int population_voltage_base_index = 0;
+  int var_base_index = 0;
+  int param_base_index = 0;
+  float* GPU_population_vars = nullptr;
+  std::vector<double> delivery_delays;
+  float* GPU_delayed_spikes = nullptr;
+  int delay_buffer_size = 1;
+
+  {{class_name}}Device* device_ = nullptr;
+  bool device_dependencies_bound_ = false;
+  {{class_name}}Device& device_view();
+  void clear_device_dependencies();
+  void bind_device_dependencies({% for ode in conc_dep %}{% if not loop.first %}, {% endif %}float* dep_{{ode.lhs.name}}{% endfor %}{% if conc_dep and (rec_dep or chan_dep or con_in_dep) %}, {% endif %}{% for inline in rec_dep %}{% if not loop.first %}, {% endif %}float* dep_{{inline.variable_name}}{% endfor %}{% if rec_dep and (chan_dep or con_in_dep) %}, {% endif %}{% for inline in chan_dep %}{% if not loop.first %}, {% endif %}float* dep_{{inline.variable_name}}{% endfor %}{% if chan_dep and con_in_dep %}, {% endif %}{% for inline in con_in_dep %}{% if not loop.first %}, {% endif %}float* dep_{{inline.variable_name}}{% endfor %});
+
+public:
+  // constructor, destructor
+  {{class_name}}(){};
+  ~{{class_name}}();
+
+  void new_receptor(std::size_t comp_ass, const long rec_index);
+  void new_receptor(std::size_t comp_ass, const long rec_index, const nlohmann::json& receptor_params);
+  void init_base_arrays(float* vars, float* params, int n_var, int n_param, int i_neuron, int var_base_index, int param_base_index, int mechanism_count)
+  {
+    GPU_{{receptor_name}}_vars = vars == nullptr ? nullptr : vars + i_neuron * n_var + var_base_index;
+    GPU_{{receptor_name}}_param = params == nullptr ? nullptr : params + i_neuron * n_param + param_base_index;
+    mechanism_stride = mechanism_count;
+    this->var_base_index = var_base_index;
+    this->param_base_index = param_base_index;
+  }
+
+  void configure_population(float* var_arr,
+                            float* param_arr,
+                            int n_var,
+                            int n_param,
+                            int neuron_count,
+                            int compartment_count,
+                            int compartment_voltage_base_index,
+                            int mechanism_count,
+                            int mechanism_var_base_index,
+                            int mechanism_param_base_index,
+                            const std::vector<int>& global_compartment_association,
+                            const std::vector<int>& receptor_indices,
+                            int* global_self_spikes,
+                            double* global_time_resolution);
+  int get_var_base_index() const { return var_base_index; }
+  int get_param_base_index() const { return param_base_index; }
+  const std::vector<long>& get_receptor_indices() const { return rec_idx; }
+
+  //number of receptors
+  std::size_t neuron_{{ receptor_name }}_receptor_count = 0;
+  std::vector< size_t > compartment_association = {};
+
+  void f_numstep_device(float* shared_v_comp, float* compartment_g, float* compartment_i, int total_compartment_count, long lag, float* port_input_arr, int port_input_arr_step, int port_input_port_step{% for ode in conc_dep %}, float* dep_{{ode.lhs.name}}{% endfor %}{% for inline in rec_dep %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in chan_dep %}, float* dep_{{inline.variable_name}}{% endfor %}{% for inline in con_in_dep %}, float* dep_{{inline.variable_name}}{% endfor %}, cudaStream_t stream = nullptr);
+  void add_total_current_to_device(float* compartment_current, int compartment_count, cudaStream_t stream = nullptr) const;
+
+    void f_self_spike(cudaStream_t stream = nullptr);
+
+  // calibration
+  void calibrate(double time_resolution);
+  // function declarations
+  {%- for function in (receptor_info["Functions"] + synapse_info["Functions"]) %}
+  #pragma omp declare simd
+    __attribute__((always_inline)) inline {{ function_declaration.FunctionDeclaration(function, pass_by_reference = true) -}};
+  {% endfor %}
+
+};
+
+
+} // paired receptor and synapse
+using {{class_name}} = paired_{{receptor_name}}{{cm_unique_suffix}}_{{synapse_name}}::{{class_name}};
+{%- endfor %}
+{%- endfor %}
+
 #endif /* #ifndef RECEPTORS_NEAT_H_{{cm_unique_suffix | upper }} */

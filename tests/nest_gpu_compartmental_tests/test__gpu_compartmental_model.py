@@ -17,6 +17,7 @@ import sys
 
 import nest
 import numpy as np
+import pytest
 
 from pynestml.frontend.pynestml_frontend import generate_nest_gpu_compartmental_target
 
@@ -348,13 +349,19 @@ def plot_cm_default_comparison(cpu, gpu, output_dir):
 
 
 class TestNESTGPUCompartmentalModel:
-    def test_cm_default_against_single_precision_cpu_nestml(self, tmp_path, cpu_single_precision_cm_default):
+    @pytest.mark.parametrize("gpu_tree_solver", ["hines", "r_edd"])
+    def test_cm_default_against_single_precision_cpu_nestml(
+            self, tmp_path, cpu_single_precision_cm_default, gpu_tree_solver):
         tests_path = os.path.realpath(os.path.dirname(__file__))
         target_path = os.path.join(tests_path, "target")
         nest_gpu_path = os.environ.get("NEST_GPU", os.getcwd())
         assert os.path.isdir(os.path.join(nest_gpu_path, "src"))
 
-        generate_gpu_default_model(target_path)
+        generate_gpu_default_model(target_path, codegen_opts={
+            "gpu_tree_solver": gpu_tree_solver,
+            # Exercise decomposition even for this two-compartment model.
+            "gpu_tree_solver_base_size": 1,
+        })
         cpu = run_cpu_cm_default(cpu_single_precision_cm_default)
         gpu = run_gpu_cm_default(tmp_path)
         plot_cm_default_comparison(cpu, gpu, target_path)

@@ -1,0 +1,221 @@
+/* Recursive exact domain decomposition (Vooturi et al., HiPC 2017).
+ * This file is part of NEST. Copyright (C) 2004 The NEST Initiative.
+ * Licensed under the GNU General Public License, version 2 or later.
+ */
+#include <algorithm>
+#include <stdexcept>
+#include <utility>
+#include <vector>
+
+namespace cm_r_edd{{cm_unique_suffix}}
+{
+// All indices are local to a hierarchy level, with contiguous trees in
+// parent-before-child order. Numerical values are never cached in this plan.
+struct LevelPlan
+{
+  std::vector<int> parent, tree_offsets;
+  std::vector<int> junctions, junction_index;
+  std::vector<int> chain_offsets, chain_nodes, chain_upper, chain_lower;
+  std::vector<int> incident_offsets, incident_chains, parent_chain;
+};
+
+struct Plan
+{
+  std::vector<int> permutation; // solver index -> population compartment index
+  std::vector<LevelPlan> levels;
+
+  // Prepare the entire reduction hierarchy once, during host initialization.
+  // At runtime, Solver::solve() walks these levels forward to eliminate chain
+  // interiors, solves the final level on the GPU, then walks backward to
+  // reconstruct voltages. This function only plans topology; it does no
+  // matrix factorization and does not depend on timestep-specific coefficients.
+  void build(const std::vector<int>& parents, const std::vector<int>& child_offsets,
+             const std::vector<int>& child_indices, int compartments_per_neuron,
+             int chain_length, int base_size)
+  {
+    // 1. Use the population topology prepared by initialize_population_runtime().
+    // The caller has already validated parent links, connectivity and one soma
+    // at the start of each neuron. Its flat child adjacency is reused directly:
+    // children of node i occupy child_indices[child_offsets[i]:child_offsets[i+1]].
+    // Input indices address the flattened population: each neuron occupies
+    // compartments_per_neuron consecutive entries, with its soma first.
+    if (compartments_per_neuron < 1 || parents.empty()
+        || parents.size() % compartments_per_neuron != 0
+        || child_offsets.size() != parents.size() + 1 || chain_length < 2 || base_size < 1)
+    {
+      throw std::runtime_error("Invalid R-EDD plan dimensions or options");
+    }
+    permutation.clear();
+    levels.clear();
+    const int n = static_cast<int>(parents.size());
+    const int trees = n / compartments_per_neuron;
+    // 2. Put each tree into depth-first, parent-before-child solver order.
+    // Original compartment indices need not already have this ordering.
+    // Keeping neurons contiguous allows one base-solver thread per neuron;
+    // tree_offsets stores the half-open range of each tree at this level.
+    LevelPlan first;
+    first.tree_offsets.push_back(0);
+    for (int tree = 0; tree < trees; ++tree)
+    {
+      std::vector<int> pending(1, tree * compartments_per_neuron);
+      while (!pending.empty())
+      {
+        const int node = pending.back();
+        pending.pop_back();
+        permutation.push_back(node);
+        // Reverse insertion preserves child order when popping the DFS stack.
+        for (int entry = child_offsets[node + 1]; entry > child_offsets[node]; --entry)
+        {
+          pending.push_back(child_indices[entry - 1]);
+        }
+      }
+      first.tree_offsets.push_back(static_cast<int>(permutation.size()));
+    }
+    // permutation maps solver -> original indices (for gather/scatter).
+    // Its inverse translates the original parent links into solver indices.
+    std::vector<int> inverse(n);
+    for (int i = 0; i < n; ++i)
+    {
+      inverse[permutation[i]] = i;
+    }
+    for (const int node : permutation)
+    {
+      first.parent.push_back(parents[node] < 0 ? -1 : inverse[parents[node]]);
+    }
+    levels.push_back(std::move(first));
+
+    // Each iteration plans one reduction: levels.back() -> next.
+    // Junctions retained at the current level become all nodes of the next.
+    // The final level has no decomposition metadata and is solved directly.
+    while (true)
+    {
+      // 3. Stop when every reduced neuron fits the configured base size.
+      // Compare the largest individual tree, not the total population size.
+      LevelPlan& level = levels.back();
+      int largest_tree = 0;
+      for (int tree = 0; tree < trees; ++tree)
+      {
+        largest_tree = std::max(largest_tree, level.tree_offsets[tree + 1] - level.tree_offsets[tree]);
+      }
+      if (largest_tree <= base_size)
+      {
+        break;
+      }
+      // 4. Select the junctions that survive this reduction.
+      // Rebuild child adjacency because this level may already be a reduced
+      // forest with different parent links from the original morphology.
+      const int size = static_cast<int>(level.parent.size());
+      std::vector<std::vector<int>> level_children(size);
+      for (int i = 0; i < size; ++i)
+      {
+        if (level.parent[i] >= 0)
+        {
+          level_children[level.parent[i]].push_back(i);
+        }
+      }
+      // Always retain roots and branching nodes. Along unbranched paths,
+      // retain another node every chain_length edges from the last junction.
+      // The interiors between junctions therefore contain at most K-1 nodes.
+      // Parent-before-child order makes distance[parent] available in one pass.
+      //
+      // There are two index spaces from here onward:
+      //   junctions[j]      = current-level node for next-level node j;
+      //   junction_index[i] = next-level index of current node i, or -1 if
+      //                       node i will be eliminated as a chain interior.
+      std::vector<int> distance(size, 0);
+      level.junction_index.assign(size, -1);
+      for (int i = 0; i < size; ++i)
+      {
+        const int p = level.parent[i];
+        distance[i] = p < 0 ? 0 : distance[p] + 1;
+        if (p < 0 || level_children[i].size() > 1 || distance[i] == chain_length)
+        {
+          level.junction_index[i] = static_cast<int>(level.junctions.size());
+          level.junctions.push_back(i);
+          distance[i] = 0;
+        }
+      }
+      const int reduced_size = static_cast<int>(level.junctions.size());
+      // Bound work and workspace even for branch-dominated trees. A GPU Hines
+      // base solve handles levels that would shrink by less than one quarter.
+      if (reduced_size > size - size / 4 || reduced_size == size)
+      {
+        // Discard the candidate junction set: this level becomes the base
+        // system, even if some neurons are larger than base_size.
+        level.junctions.clear();
+        level.junction_index.clear();
+        break;
+      }
+      // 5. Allocate the next forest's parent links and neuron boundaries.
+      // Junctions were appended in increasing current-level index order, so
+      // lower_bound finds where each neuron's retained nodes end. Reduced
+      // neuron sizes may differ, even though their original sizes were equal.
+      LevelPlan next;
+      next.parent.assign(reduced_size, -1);
+      next.tree_offsets.push_back(0);
+      for (int tree = 0; tree < trees; ++tree)
+      {
+        const auto end = std::lower_bound(level.junctions.begin(), level.junctions.end(), level.tree_offsets[tree + 1]);
+        next.tree_offsets.push_back(static_cast<int>(end - level.junctions.begin()));
+      }
+      // 6. Extract independent chain interiors between retained junctions.
+      // upper/lower are next-level indices; entries in chain_nodes remain
+      // current-level indices. Each chain occupies the half-open slice
+      // chain_nodes[chain_offsets[c] : chain_offsets[c+1]].
+      //
+      // parent_chain[j] identifies the eliminated chain toward j's parent.
+      // It stays -1 for roots and direct edges between adjacent junctions.
+      level.parent_chain.assign(reduced_size, -1);
+      std::vector<std::vector<int>> incident(reduced_size);
+      level.chain_offsets.push_back(0);
+      for (int upper = 0; upper < reduced_size; ++upper)
+      {
+        for (int node : level_children[level.junctions[upper]])
+        {
+          if (level.junction_index[node] >= 0)
+          {
+            next.parent[level.junction_index[node]] = upper;
+            continue; // Direct junction edge: no tridiagonal interior.
+          }
+          const int chain = static_cast<int>(level.chain_upper.size());
+          level.chain_upper.push_back(upper);
+          // Encode the chain endpoint as 2*c for its upper boundary and
+          // 2*c+1 for its lower boundary. Assembly uses this to choose the
+          // endpoint coupling and response contributing to each junction row.
+          incident[upper].push_back(2 * chain);
+          // Branching nodes are junctions, so every interior node has at
+          // most one child. Walk until the next junction or a terminal leaf.
+          while (node >= 0 && level.junction_index[node] < 0)
+          {
+            level.chain_nodes.push_back(node);
+            node = level_children[node].empty() ? -1 : level_children[node][0];
+          }
+          // A terminal chain has only an upper boundary (lower == -1).
+          // Otherwise, replace the whole chain with one edge in the next tree.
+          const int lower = node < 0 ? -1 : level.junction_index[node];
+          level.chain_lower.push_back(lower);
+          level.chain_offsets.push_back(static_cast<int>(level.chain_nodes.size()));
+          if (lower >= 0)
+          {
+            next.parent[lower] = upper;
+            level.parent_chain[lower] = chain;
+            incident[lower].push_back(2 * chain + 1);
+          }
+        }
+      }
+      // 7. Flatten junction-to-chain adjacency for GPU assembly, then descend.
+      // incident_offsets[j:j+2] bounds the entries for junction j. This lets
+      // one GPU thread gather all contributions to its row without atomics.
+      level.incident_offsets.push_back(0);
+      for (const auto& entries : incident)
+      {
+        level.incident_chains.insert(level.incident_chains.end(), entries.begin(), entries.end());
+        level.incident_offsets.push_back(static_cast<int>(level.incident_chains.size()));
+      }
+      // The next iteration applies the same decomposition to the reduced
+      // forest. Pushing can invalidate the reference 'level'; do not reuse it.
+      levels.push_back(std::move(next));
+    }
+  }
+};
+}

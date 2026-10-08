@@ -1,0 +1,144 @@
+/* This file is part of NEST. Copyright (C) 2004 The NEST Initiative.
+ * Licensed under the GNU General Public License, version 2 or later.
+ */
+namespace cm_r_edd{{cm_unique_suffix}}
+{
+__global__ void gather_kernel(LevelView a, const int* permutation, int size,
+                              const float* diagonal, const float* rhs)
+{
+  const int node = blockIdx.x * blockDim.x + threadIdx.x;
+  if (node < size)
+  {
+    a.diagonal[node] = diagonal[permutation[node]];
+    a.rhs[node] = rhs[permutation[node]];
+  }
+}
+
+__global__ void chains_kernel(LevelView a, int chains)
+{
+  const int chain = blockIdx.x * blockDim.x + threadIdx.x;
+  if (chain < chains)
+  {
+    solve_chain(a, chain);
+  }
+}
+
+__global__ void assemble_kernel(LevelView a, LevelView reduced, int junctions)
+{
+  const int junction = blockIdx.x * blockDim.x + threadIdx.x;
+  if (junction < junctions)
+  {
+    assemble_junction(a, reduced, junction);
+  }
+}
+
+__global__ void base_kernel(LevelView a, int trees)
+{
+  const int tree = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tree < trees)
+  {
+    solve_base_tree(a, tree);
+  }
+}
+
+__global__ void reconstruct_kernel(LevelView a, LevelView reduced, int chains, int junctions)
+{
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  // Chains and junctions own disjoint output elements. All boundary values
+  // are read from the next level, so neither part requires a block barrier.
+  if (i < chains)
+  {
+    reconstruct_chain(a, reduced, i);
+  }
+  if (i < junctions)
+  {
+    a.rhs[a.junctions[i]] = reduced.rhs[i];
+  }
+}
+
+__global__ void scatter_kernel(LevelView a, const int* permutation, int size,
+                               float* population_vars, int compartments_per_neuron,
+                               int n_var, int voltage_base, const float* thresholds, int* self_spikes,
+                               bool* above_threshold)
+{
+  const int node = blockIdx.x * blockDim.x + threadIdx.x;
+  if (node < size)
+  {
+    const int original = permutation[node];
+    const int neuron = original / compartments_per_neuron;
+    const int local = original % compartments_per_neuron;
+    float* voltage = population_vars + neuron * n_var + voltage_base + local;
+    if (local == 0)
+    {
+      const bool above = a.rhs[node] >= thresholds[neuron];
+      self_spikes[neuron] = above && !above_threshold[neuron];
+      above_threshold[neuron] = above;
+    }
+    *voltage = a.rhs[node];
+  }
+}
+
+void Solver::initialize(const std::vector<int>& parents, const std::vector<int>& child_offsets,
+                        const std::vector<int>& child_indices, const std::vector<float>& coupling,
+                        int compartments_per_neuron)
+{
+  Plan plan;
+  plan.build(parents, child_offsets, child_indices, compartments_per_neuron,
+             {{gpu_tree_solver_chain_length}}, {{gpu_tree_solver_base_size}});
+  if (coupling.size() != parents.size())
+  {
+    throw std::runtime_error("R-EDD coupling and parent sizes differ");
+  }
+  // The owning tree destroys its graph before reinitialization. No pointers
+  // used by a captured solve are changed between simulation timesteps.
+  levels_.clear();
+  check_cuda(cudaFree(permutation_.data));
+  permutation_.data = nullptr;
+  permutation_.upload(plan.permutation);
+  compartments_per_neuron_ = compartments_per_neuron;
+  for (const auto& level : plan.levels)
+  {
+    levels_.emplace_back(new DeviceLevel(level));
+  }
+  std::vector<float> ordered_coupling(coupling.size());
+  for (size_t i = 0; i < coupling.size(); ++i)
+  {
+    ordered_coupling[i] = coupling[plan.permutation[i]];
+  }
+  check_cuda(cudaMemcpy(levels_.front()->coupling.data, ordered_coupling.data(),
+                       ordered_coupling.size() * sizeof(float), cudaMemcpyHostToDevice));
+}
+
+void Solver::solve(const float* diagonal, const float* rhs, float* population_vars,
+                   int n_var, int voltage_base, const float* thresholds, int* self_spikes,
+                   bool* above_threshold,
+                   cudaStream_t stream)
+{
+  const int block = 128;
+  DeviceLevel& first = *levels_.front();
+  gather_kernel<<<(first.size + block - 1) / block, block, 0, stream>>>(
+    first.view(), permutation_.data, first.size, diagonal, rhs);
+  for (size_t depth = 0; depth + 1 < levels_.size(); ++depth)
+  {
+    DeviceLevel& a = *levels_[depth];
+    DeviceLevel& reduced = *levels_[depth + 1];
+    chains_kernel<<<(a.chains + block - 1) / block, block, 0, stream>>>(a.view(), a.chains);
+    assemble_kernel<<<(a.junction_count + block - 1) / block, block, 0, stream>>>(
+      a.view(), reduced.view(), a.junction_count);
+  }
+  DeviceLevel& base = *levels_.back();
+  base_kernel<<<(base.trees + block - 1) / block, block, 0, stream>>>(base.view(), base.trees);
+  for (int depth = static_cast<int>(levels_.size()) - 2; depth >= 0; --depth)
+  {
+    DeviceLevel& a = *levels_[depth];
+    DeviceLevel& reduced = *levels_[depth + 1];
+    const int count = std::max(a.chains, a.junction_count);
+    reconstruct_kernel<<<(count + block - 1) / block, block, 0, stream>>>(
+      a.view(), reduced.view(), a.chains, a.junction_count);
+  }
+  scatter_kernel<<<(first.size + block - 1) / block, block, 0, stream>>>(
+    first.view(), permutation_.data, first.size, population_vars, compartments_per_neuron_,
+    n_var, voltage_base, thresholds, self_spikes, above_threshold);
+  check_cuda(cudaGetLastError());
+}
+}

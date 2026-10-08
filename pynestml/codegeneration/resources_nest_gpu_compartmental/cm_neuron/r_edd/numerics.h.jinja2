@@ -1,0 +1,118 @@
+/* This file is part of NEST. Copyright (C) 2004 The NEST Initiative.
+ * Licensed under the GNU General Public License, version 2 or later.
+ */
+namespace cm_r_edd{{cm_unique_suffix}}
+{
+// Shared scalar routines permit CPU reference checks of the exact arithmetic
+// used by the kernels. Production calls these routines only on the device.
+struct LevelView
+{
+  const int *parent, *tree_offsets, *junctions;
+  const int *chain_offsets, *chain_nodes, *chain_upper, *chain_lower;
+  const int *incident_offsets, *incident_chains, *parent_chain;
+  float *diagonal, *rhs, *coupling, *upper_response, *lower_response;
+};
+
+#ifdef __CUDACC__
+__host__ __device__
+#endif
+inline void solve_chain(LevelView a, int chain)
+{
+  const int begin = a.chain_offsets[chain];
+  const int end = a.chain_offsets[chain + 1];
+  const int lower = a.chain_lower[chain];
+  // T y = b, T u = upper boundary coupling, T v = lower boundary coupling.
+  // Factor once and apply the same elimination to all three right hand sides.
+  for (int entry = begin; entry < end; ++entry)
+  {
+    const int node = a.chain_nodes[entry];
+    a.upper_response[node] = entry == begin ? a.coupling[node] : 0.0f;
+    a.lower_response[node] = entry == end - 1 && lower >= 0 ? a.coupling[a.junctions[lower]] : 0.0f;
+    if (entry > begin)
+    {
+      const int previous = a.chain_nodes[entry - 1];
+      const float factor = a.coupling[node] / a.diagonal[previous];
+      a.diagonal[node] -= factor * a.coupling[node];
+      a.rhs[node] -= factor * a.rhs[previous];
+      a.upper_response[node] -= factor * a.upper_response[previous];
+      a.lower_response[node] -= factor * a.lower_response[previous];
+    }
+  }
+  for (int entry = end - 1; entry >= begin; --entry)
+  {
+    const int node = a.chain_nodes[entry];
+    if (entry + 1 < end)
+    {
+      const int next = a.chain_nodes[entry + 1];
+      a.rhs[node] -= a.coupling[next] * a.rhs[next];
+      a.upper_response[node] -= a.coupling[next] * a.upper_response[next];
+      a.lower_response[node] -= a.coupling[next] * a.lower_response[next];
+    }
+    a.rhs[node] /= a.diagonal[node];
+    a.upper_response[node] /= a.diagonal[node];
+    a.lower_response[node] /= a.diagonal[node];
+  }
+}
+
+#ifdef __CUDACC__
+__host__ __device__
+#endif
+inline void assemble_junction(LevelView a, LevelView reduced, int junction)
+{
+  const int node = a.junctions[junction];
+  float diagonal = a.diagonal[node];
+  float rhs = a.rhs[node];
+  // One writer per junction, avoiding atomics and nondeterministic sums.
+  for (int i = a.incident_offsets[junction]; i < a.incident_offsets[junction + 1]; ++i)
+  {
+    const int entry = a.incident_chains[i];
+    const int chain = entry / 2;
+    const bool lower = entry % 2 != 0;
+    const int endpoint = a.chain_nodes[lower ? a.chain_offsets[chain + 1] - 1 : a.chain_offsets[chain]];
+    const float edge = lower ? a.coupling[node] : a.coupling[endpoint];
+    diagonal -= edge * (lower ? a.lower_response[endpoint] : a.upper_response[endpoint]);
+    rhs -= edge * a.rhs[endpoint];
+  }
+  reduced.diagonal[junction] = diagonal;
+  reduced.rhs[junction] = rhs;
+  const int chain = a.parent_chain[junction];
+  reduced.coupling[junction] = chain < 0 ? a.coupling[node]
+    : -a.coupling[node] * a.upper_response[a.chain_nodes[a.chain_offsets[chain + 1] - 1]];
+}
+
+#ifdef __CUDACC__
+__host__ __device__
+#endif
+inline void solve_base_tree(LevelView a, int tree)
+{
+  const int begin = a.tree_offsets[tree];
+  const int end = a.tree_offsets[tree + 1];
+  for (int node = end - 1; node > begin; --node)
+  {
+    const int parent = a.parent[node];
+    const float factor = a.coupling[node] / a.diagonal[node];
+    a.diagonal[parent] -= factor * a.coupling[node];
+    a.rhs[parent] -= factor * a.rhs[node];
+  }
+  a.rhs[begin] /= a.diagonal[begin];
+  for (int node = begin + 1; node < end; ++node)
+  {
+    a.rhs[node] = (a.rhs[node] - a.coupling[node] * a.rhs[a.parent[node]]) / a.diagonal[node];
+  }
+}
+
+#ifdef __CUDACC__
+__host__ __device__
+#endif
+inline void reconstruct_chain(LevelView a, LevelView reduced, int chain)
+{
+  const float upper = reduced.rhs[a.chain_upper[chain]];
+  const int lower_index = a.chain_lower[chain];
+  const float lower = lower_index < 0 ? 0.0f : reduced.rhs[lower_index];
+  for (int i = a.chain_offsets[chain]; i < a.chain_offsets[chain + 1]; ++i)
+  {
+    const int node = a.chain_nodes[i];
+    a.rhs[node] -= a.upper_response[node] * upper + a.lower_response[node] * lower;
+  }
+}
+}

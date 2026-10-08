@@ -138,6 +138,10 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
             "continuouscurrents": self.get_cm_syns_continuouscurrents_file_prefix(neuron),
         })
         namespace["cuda_printer"] = _CompartmentalCUDAPrinter(neuron, self._printer_no_origin)
+        for synapse_info in namespace["syns_info"].values():
+            namespace["cuda_printer"].parameter_names.update(synapse_info["Parameters"])
+            namespace["cuda_printer"].parameter_names.update(
+                name for name in synapse_info["Internals"] if name != "__h" and not name.startswith("__P__"))
         for name in ("gpu_tree_solver", "gpu_tree_solver_chain_length", "gpu_tree_solver_base_size"):
             namespace[name] = self.get_option(name)
         self._enrich_mechanism_usage_flags(namespace)
@@ -181,7 +185,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
         namespace["has_self_spike_processing"] = any(
             info.get("has_self_spike_processing", False)
             for info in mechanism_infos
-        )
+        ) or any(info.get("PostSpikeFunction") is not None for info in syns_info.values())
 
     @staticmethod
     def _mark_required_shared_outputs(consumer_info: Dict[str, Any],
@@ -297,7 +301,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
 
 class _CompartmentalCUDAPrinter:
     def __init__(self, neuron: ASTModel, printer):
-        self.printer = printer
+        self._expression_printer = printer
         self.parameter_names = {
             symbol.get_symbol_name()
             for symbol in list(neuron.get_parameter_symbols()) + list(neuron.get_internal_symbols())
@@ -308,7 +312,7 @@ class _CompartmentalCUDAPrinter:
               param_index: Optional[str] = None, param_stride: Optional[str] = None):
         black_list = black_list or []
         suffix = "*" + stride + "+" + index + "]" if stride else "+" + index + "]"
-        variable_printer = self.printer._simple_expression_printer._variable_printer
+        variable_printer = self._expression_printer._simple_expression_printer._variable_printer
         old_prefix = variable_printer.cpp_variable_prefix
         old_suffix = variable_printer.cpp_variable_suffix
         old_black_list = variable_printer.cpp_variable_black_list
@@ -316,7 +320,7 @@ class _CompartmentalCUDAPrinter:
             variable_printer.cpp_variable_prefix = array_name + "[i_"
             variable_printer.cpp_variable_suffix = suffix
             variable_printer.cpp_variable_black_list = set(black_list)
-            code = self.printer.print(expression)
+            code = self._expression_printer.print(expression)
         finally:
             variable_printer.cpp_variable_prefix = old_prefix
             variable_printer.cpp_variable_suffix = old_suffix
@@ -331,6 +335,8 @@ class _CompartmentalCUDAPrinter:
                     "param[i_" + parameter_name + param_suffix)
         for variable_name in black_list:
             code = code.replace(array_name + "[i_" + variable_name + suffix, variable_name)
+        # std::min/max are host-only with the supported CUDA toolchain.
+        code = code.replace("std::min(", "fmin(").replace("std::max(", "fmax(")
         return code
 
     def printer(self, index: str = "i", black_list=None, stride: Optional[str] = None,

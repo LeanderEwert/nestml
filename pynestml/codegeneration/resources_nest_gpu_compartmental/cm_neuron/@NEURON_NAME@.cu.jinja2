@@ -28,6 +28,7 @@
 #include <stdexcept>
 
 #include "{{neuronName}}.h"
+#include "ngpu_exception.h"
 #include "spike_buffer.h"
 
 using namespace {{neuronName}}_ns;
@@ -85,7 +86,7 @@ int {{neuronName}}::Init(int i_node_0, int n_node, int /*n_port*/, int i_group)
   return 0;
 }
 
-int {{neuronName}}::Calibrate(double /*time_min*/, float time_resolution)
+int {{neuronName}}::Calibrate(double /*time_min*/, float time_resolution) try
 {
   time_resolution_ = time_resolution;
 
@@ -114,8 +115,18 @@ int {{neuronName}}::Calibrate(double /*time_min*/, float time_resolution)
                                                  n_var_,
                                                  n_param_,
                                                  thresholds,
-                                                 time_resolution_);
+                                                 time_resolution_,
+                                                 i_node_0_);
   return 0;
+}
+catch (const ngpu_exception&)
+{
+  throw;
+}
+catch (const std::exception& error)
+{
+  // NEST-GPU's C interface preserves messages only for ngpu_exception.
+  throw ngpu_exception(std::string("{{neuronName}} calibration: ") + error.what());
 }
 
 float* {{neuronName}}::GetVarPt(int i_neuron, std::string var_name, int port)

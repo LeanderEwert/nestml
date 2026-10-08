@@ -12,6 +12,8 @@
 set_spiketime(nest::Time::step(origin.get_steps() + lag + 1));
 nest::SpikeEvent se;
 nest::kernel().event_delivery_manager.send(*this, se, lag);
+{%- elif gpu_synapse_processing | default(false) %}
+enqueue_spike(i, {{printer.print(ast.get_args()[0])}});
 {%- else %}
 delayed_spikes[{{ printer.std_vector_parameter }}].push({{ printer.print(ast.get_args()[0]) }});
 {%- endif %}

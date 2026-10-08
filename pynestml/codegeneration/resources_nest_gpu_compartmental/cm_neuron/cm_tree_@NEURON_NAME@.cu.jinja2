@@ -20,6 +20,7 @@
  *
  */
 #include "{{neuronSpecificFileNamesCmSyns["tree"]}}.h"
+#include "spike_buffer.h"
 
 {% if gpu_tree_solver == 'r_edd' %}
 {% include 'r_edd/kernels.cu.jinja2' %}
@@ -27,6 +28,17 @@
 
 namespace
 {
+__global__ void cm_tree_emit_population_spikes_kernel(int neuron_count,
+                                                      int first_node,
+                                                      const int* self_spikes)
+{
+  const int neuron = blockIdx.x * blockDim.x + threadIdx.x;
+  if (neuron < neuron_count && self_spikes[neuron])
+  {
+    PushSpike(first_node + neuron, 1.0f);
+  }
+}
+
 float profile_elapsed_ms(cudaEvent_t start, cudaEvent_t stop)
 {
   float elapsed_ms = 0.0f;
@@ -116,7 +128,8 @@ __global__ void cm_tree_solve_root_and_upsweep_kernel(float* population_vars,
                                                       int neuron_count,
                                                       int compartment_count,
                                                       const float* thresholds,
-                                                      int* self_spikes)
+                                                      int* self_spikes,
+                                                      bool* above_threshold)
 {
   const int i_neuron = blockIdx.x * blockDim.x + threadIdx.x;
   if (i_neuron >= neuron_count || compartment_count <= 0)
@@ -127,9 +140,6 @@ __global__ void cm_tree_solve_root_and_upsweep_kernel(float* population_vars,
   const int compartment_base = i_neuron * compartment_count;
   float* compartment_voltages =
     population_vars + i_neuron * n_var + compartment_voltage_base_index;
-  const float previous_soma_voltage_value = compartment_voltages[0];
-  self_spikes[i_neuron] = 0;
-
   compartment_voltages[0] = ff[compartment_base] / gg[compartment_base];
   for (int local = 1; local < compartment_count; ++local)
   {
@@ -139,8 +149,11 @@ __global__ void cm_tree_solve_root_and_upsweep_kernel(float* population_vars,
     const float parent_v = parent >= 0 ? compartment_voltages[parent_local] : 0.0f;
     compartment_voltages[local] = (ff[i] - parent_v * hh[i]) / gg[i];
   }
-  self_spikes[i_neuron] =
-    (compartment_voltages[0] >= thresholds[i_neuron] && previous_soma_voltage_value < thresholds[i_neuron]) ? 1 : 0;
+  // Remember the last threshold decision across externally assigned voltages,
+  // matching the CPU compartmental neuron's thr_mem.
+  const bool above = compartment_voltages[0] >= thresholds[i_neuron];
+  self_spikes[i_neuron] = above && !above_threshold[i_neuron];
+  above_threshold[i_neuron] = above;
 }
 {% endif %}
 }
@@ -242,6 +255,7 @@ CompTree{{cm_unique_suffix}}::~CompTree{{cm_unique_suffix}}()
   {
     cudaStreamDestroy(update_graph_capture_stream_);
   }
+  cudaFree(GPU_population_above_threshold);
 }
 
 void
@@ -395,6 +409,11 @@ CompTree{{cm_unique_suffix}}::add_compartment( const long parent_index, const nl
 void
 CompTree{{cm_unique_suffix}}::add_compartment( Compartment{{cm_unique_suffix}}* compartment, const long parent_index )
 {
+  // HostNeuronState can be copied when the population vector grows.
+  if (!compartments_.empty() && compartments_.front() != &root_)
+  {
+    set_compartments();
+  }
   size_++;
 
   if ( parent_index >= 0 )
@@ -404,7 +423,8 @@ CompTree{{cm_unique_suffix}}::add_compartment( Compartment{{cm_unique_suffix}}* 
      * get_compartment(), because we want to print a more informative
      * exception message
      */
-    Compartment{{cm_unique_suffix}}* parent = get_compartment( parent_index, get_root(), 0 );
+    Compartment{{cm_unique_suffix}}* parent = parent_index < static_cast<long>(compartments_.size())
+      ? compartments_[parent_index] : nullptr;
     if ( parent == nullptr )
     {
       std::string msg = "does not exist in tree, but was specified as a parent compartment";
@@ -432,7 +452,7 @@ CompTree{{cm_unique_suffix}}::add_compartment( Compartment{{cm_unique_suffix}}* 
 /**
  * Get the compartment corresponding to the provided index in the tree.
  *
- * This function gets the compartments by a recursive search through the tree.
+ * The single-index overload uses the pointer table maintained during insertion.
  *
  * The overloaded functions looks only in the subtree of the provided compartment,
  * and also has the option to throw an error if no compartment corresponding to
@@ -441,7 +461,16 @@ CompTree{{cm_unique_suffix}}::add_compartment( Compartment{{cm_unique_suffix}}* 
 Compartment{{cm_unique_suffix}}*
 CompTree{{cm_unique_suffix}}::get_compartment( const long compartment_index ) const
 {
-  return get_compartment( compartment_index, get_root(), 1 );
+  if (compartment_index < 0 || compartment_index >= static_cast<long>(compartments_.size()))
+  {
+    throw std::runtime_error("does not exist in tree");
+  }
+  if (compartments_.front() != &root_)
+  {
+    // A copied host tree has not rebuilt its pointer table yet.
+    return get_compartment(compartment_index, get_root(), 1);
+  }
+  return compartments_[compartment_index];
 }
 
 Compartment{{cm_unique_suffix}}*
@@ -507,13 +536,9 @@ CompTree{{cm_unique_suffix}}::init_base_arrays(float* var_arr, int n_var, int i_
 void
 CompTree{{cm_unique_suffix}}::set_parents()
 {
-  for ( auto compartment_idx_it = compartment_indices_.begin(); compartment_idx_it != compartment_indices_.end();
-        ++compartment_idx_it )
+  for (auto* compartment : compartments_)
   {
-    Compartment{{cm_unique_suffix}}* comp_ptr = get_compartment( *compartment_idx_it );
-    // will be nullptr if root
-    Compartment{{cm_unique_suffix}}* parent_ptr = get_compartment( comp_ptr->p_index, &root_, 0 );
-    comp_ptr->parent = parent_ptr;
+    compartment->parent = compartment->p_index < 0 ? nullptr : get_compartment(compartment->p_index);
   }
 }
 
@@ -524,12 +549,24 @@ CompTree{{cm_unique_suffix}}::set_parents()
 void
 CompTree{{cm_unique_suffix}}::set_compartments()
 {
-  compartments_.clear();
-
-  for ( auto compartment_idx_it = compartment_indices_.begin(); compartment_idx_it != compartment_indices_.end();
-        ++compartment_idx_it )
+  // A children vector can relocate its subtrees on insertion, invalidating
+  // cached pointers. Rebuild them in one traversal, rather than searching from
+  // the root separately for each index (quadratic for a chain, on every add).
+  compartments_.resize(size_);
+  std::vector<Compartment{{cm_unique_suffix}}*> pending;
+  if (root_.comp_index >= 0)
   {
-    compartments_.push_back( get_compartment( *compartment_idx_it ) );
+    pending.push_back(&root_);
+  }
+  while (!pending.empty())
+  {
+    auto* compartment = pending.back();
+    pending.pop_back();
+    compartments_[compartment->comp_index] = compartment;
+    for (auto& child : compartment->children)
+    {
+      pending.push_back(&child);
+    }
   }
 }
 
@@ -562,8 +599,8 @@ CompTree{{cm_unique_suffix}}::calibrate( double time_resolution )
     throw std::runtime_error(msg);
   }
 
-  set_parents();
   set_compartments();
+  set_parents();
   set_compartment_variables();
 
   // Initialize host construction data and the BaseNeuron-backed mechanism state.
@@ -582,7 +619,8 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
   int n_var,
   int n_param,
   const std::vector<float>& thresholds,
-  double time_resolution)
+  double time_resolution,
+  int first_node)
 {
   destroy_update_graph();
   if (trees.empty())
@@ -591,6 +629,7 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
   }
 
   population_neuron_count_ = static_cast<int>(trees.size());
+  population_first_node_ = first_node;
   population_compartment_count_ = static_cast<int>(trees.front()->size_);
   population_n_var_ = n_var;
   compartment_voltage_base_index_ = trees.front()->compartment_voltage_base_index_;
@@ -746,6 +785,8 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
   cudaMalloc(&GPU_mech_i, total_compartment_count * sizeof(float));
   cudaMalloc(&GPU_thresholds, population_neuron_count_ * sizeof(float));
   cudaMalloc(&GPU_population_self_spikes, population_neuron_count_ * sizeof(int));
+  cudaFree(GPU_population_above_threshold);
+  cudaMalloc(&GPU_population_above_threshold, population_neuron_count_ * sizeof(bool));
   cudaMalloc(&GPU_population_time_resolution, sizeof(double));
 
   cudaMemcpy(GPU_ca__div__dt, ca__div__dt.data(), total_compartment_count * sizeof(float), cudaMemcpyHostToDevice);
@@ -765,11 +806,12 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
   cudaMemset(GPU_mech_g, 0, total_compartment_count * sizeof(float));
   cudaMemset(GPU_mech_i, 0, total_compartment_count * sizeof(float));
   cudaMemset(GPU_population_self_spikes, 0, population_neuron_count_ * sizeof(int));
+  cudaMemset(GPU_population_above_threshold, 0, population_neuron_count_ * sizeof(bool));
   cudaMemcpy(GPU_population_time_resolution, &time_resolution, sizeof(double), cudaMemcpyHostToDevice);
 
 {% if gpu_tree_solver == 'r_edd' %}
   r_edd_solver_ = std::make_shared<cm_r_edd{{cm_unique_suffix}}::Solver>();
-  r_edd_solver_->initialize(parent_index, hh, population_compartment_count_);
+  r_edd_solver_->initialize(parent_index, child_offsets, child_indices, hh, population_compartment_count_);
 {% endif %}
 
   neuron_currents.initialize_population_runtime(current_groups,
@@ -791,7 +833,7 @@ CompTree{{cm_unique_suffix}}::enqueue_matrix_solve(cudaStream_t stream)
 {% if gpu_tree_solver == 'r_edd' %}
   r_edd_solver_->solve(GPU_gg, GPU_ff, GPU_population_vars,
                       population_n_var_, compartment_voltage_base_index_,
-                      GPU_thresholds, GPU_population_self_spikes, stream);
+                      GPU_thresholds, GPU_population_self_spikes, GPU_population_above_threshold, stream);
 {% else %}
   const int downsweep_block_size = 256;
   const int level_count = static_cast<int>(downsweep_level_offsets_.size()) - 1;
@@ -823,8 +865,18 @@ CompTree{{cm_unique_suffix}}::enqueue_matrix_solve(cudaStream_t stream)
                                                                                            population_neuron_count_,
                                                                                            population_compartment_count_,
                                                                                            GPU_thresholds,
-                                                                                           GPU_population_self_spikes);
+                                                                                           GPU_population_self_spikes,
+                                                                                           GPU_population_above_threshold);
 {% endif %}
+}
+
+void
+CompTree{{cm_unique_suffix}}::enqueue_spike_emission(cudaStream_t stream)
+{
+  const int block_size = 256;
+  const int grid_size = (population_neuron_count_ + block_size - 1) / block_size;
+  cm_tree_emit_population_spikes_kernel<<<grid_size, block_size, 0, stream>>>(
+    population_neuron_count_, population_first_node_, GPU_population_self_spikes);
 }
 
 void
@@ -861,6 +913,7 @@ CompTree{{cm_unique_suffix}}::enqueue_population_update(float* port_input_arr,
                                                                                                 total_compartment_count);
 
   enqueue_matrix_solve(stream);
+  enqueue_spike_emission(stream);
 
   {%- if has_self_spike_processing %}
   neuron_currents.postsynaptic_synaptic_processing_device(stream);
@@ -980,6 +1033,7 @@ CompTree{{cm_unique_suffix}}::update_population(const long lag,
     cudaEventRecord(section_start);
   }
 
+  enqueue_spike_emission(nullptr);
   {%- if has_self_spike_processing %}
   neuron_currents.postsynaptic_synaptic_processing_device();
   {%- endif %}
