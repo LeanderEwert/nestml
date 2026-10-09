@@ -258,6 +258,12 @@ This prevents excessive recursion for trees dominated by branching points.
 The topology and workspace are prepared once on the host during population
 initialization. All numerical stages, including the base Hines solve, run on
 the GPU and support CUDA graph replay without per-timestep host transfers.
+Both algorithms use separate solver classes that own their execution plans and
+device workspace. Population topology validation, mechanism updates, matrix
+construction and CUDA graph capture remain shared. R-EDD does not allocate the
+plain Hines solver's downsweep arrays. Matrix diagonals and right-hand sides
+are timestep scratch: plain Hines eliminates them in place, while R-EDD copies
+them into its own workspace.
 Matrix factors are recomputed each timestep; neurons may have different
 matrix coefficients and parent relations within the existing requirement
 of equal compartment counts per population. Original compartment indices

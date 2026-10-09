@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <utility>
+{% include 'solver/device.h.jinja2' %}
 {% include 'r_edd/plan.h.jinja2' %}
 {% include 'r_edd/numerics.h.jinja2' %}
 
@@ -18,30 +19,7 @@ inline void check_cuda(cudaError_t status)
   }
 }
 
-template<typename T> struct DeviceBuffer
-{
-  T* data = nullptr;
-  DeviceBuffer() = default;
-  DeviceBuffer(const DeviceBuffer&) = delete;
-  DeviceBuffer& operator=(const DeviceBuffer&) = delete;
-  ~DeviceBuffer() { cudaFree(data); }
-
-  void allocate(size_t size)
-  {
-    if (size > 0)
-    {
-      check_cuda(cudaMalloc(reinterpret_cast<void**>(&data), size * sizeof(T)));
-    }
-  }
-  void upload(const std::vector<T>& values)
-  {
-    allocate(values.size());
-    if (!values.empty())
-    {
-      check_cuda(cudaMemcpy(data, values.data(), values.size() * sizeof(T), cudaMemcpyHostToDevice));
-    }
-  }
-};
+using cm_tree_solver{{cm_unique_suffix}}::DeviceBuffer;
 
 struct DeviceLevel
 {
@@ -92,7 +70,8 @@ public:
   void initialize(const std::vector<int>& parents, const std::vector<int>& child_offsets,
                   const std::vector<int>& child_indices, const std::vector<float>& coupling,
                   int compartments_per_neuron);
-  void solve(const float* diagonal, const float* rhs, float* population_vars,
+  // Inputs are disposable timestep scratch; R-EDD leaves them unchanged.
+  void solve(float* diagonal, float* rhs, float* population_vars,
              int n_var, int voltage_base, const float* thresholds, int* self_spikes,
              bool* above_threshold,
              cudaStream_t stream);

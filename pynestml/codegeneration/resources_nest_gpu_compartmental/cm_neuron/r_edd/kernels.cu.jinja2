@@ -109,7 +109,7 @@ void Solver::initialize(const std::vector<int>& parents, const std::vector<int>&
                        ordered_coupling.size() * sizeof(float), cudaMemcpyHostToDevice));
 }
 
-void Solver::solve(const float* diagonal, const float* rhs, float* population_vars,
+void Solver::solve(float* diagonal, float* rhs, float* population_vars,
                    int n_var, int voltage_base, const float* thresholds, int* self_spikes,
                    bool* above_threshold,
                    cudaStream_t stream)

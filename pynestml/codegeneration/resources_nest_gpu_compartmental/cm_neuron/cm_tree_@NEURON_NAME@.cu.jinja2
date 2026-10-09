@@ -22,9 +22,7 @@
 #include "{{neuronSpecificFileNamesCmSyns["tree"]}}.h"
 #include "spike_buffer.h"
 
-{% if gpu_tree_solver == 'r_edd' %}
-{% include 'r_edd/kernels.cu.jinja2' %}
-{% endif %}
+{% include gpu_tree_solver + '/kernels.cu.jinja2' %}
 
 namespace
 {
@@ -88,74 +86,6 @@ __global__ void cm_tree_construct_matrix_kernel(float* population_vars,
   ff[global_compartment] = ca__div__dt[global_compartment] * voltage
     + gl__times__el[global_compartment] + mech_i[global_compartment];
 }
-
-{% if gpu_tree_solver != 'r_edd' %}
-__global__ void cm_tree_downsweep_level_kernel(const int* level_nodes,
-                                               int level_node_count,
-                                               const int* child_offsets,
-                                               const int* child_indices,
-                                               const float* hh,
-                                               float* gg,
-                                               float* ff)
-{
-  const int level_index = blockIdx.x * blockDim.x + threadIdx.x;
-  if (level_index >= level_node_count)
-  {
-    return;
-  }
-
-  const int node = level_nodes[level_index];
-  float node_g = gg[node];
-  float node_f = ff[node];
-  for (int child_entry = child_offsets[node + 1] - 1; child_entry >= child_offsets[node]; --child_entry)
-  {
-    const int child = child_indices[child_entry];
-    const float factor = hh[child] / gg[child];
-    node_g -= hh[child] * factor;
-    node_f -= ff[child] * factor;
-  }
-  gg[node] = node_g;
-  ff[node] = node_f;
-}
-
-__global__ void cm_tree_solve_root_and_upsweep_kernel(float* population_vars,
-                                                      int n_var,
-                                                      int compartment_voltage_base_index,
-                                                      const float* gg,
-                                                      const float* ff,
-                                                      const float* hh,
-                                                      const int* parent_index,
-                                                      int neuron_count,
-                                                      int compartment_count,
-                                                      const float* thresholds,
-                                                      int* self_spikes,
-                                                      bool* above_threshold)
-{
-  const int i_neuron = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i_neuron >= neuron_count || compartment_count <= 0)
-  {
-    return;
-  }
-
-  const int compartment_base = i_neuron * compartment_count;
-  float* compartment_voltages =
-    population_vars + i_neuron * n_var + compartment_voltage_base_index;
-  compartment_voltages[0] = ff[compartment_base] / gg[compartment_base];
-  for (int local = 1; local < compartment_count; ++local)
-  {
-    const int i = compartment_base + local;
-    const int parent = parent_index[i];
-    const int parent_local = parent - compartment_base;
-    const float parent_v = parent >= 0 ? compartment_voltages[parent_local] : 0.0f;
-    compartment_voltages[local] = (ff[i] - parent_v * hh[i]) / gg[i];
-  }
-  // Remember the last threshold decision across externally assigned voltages,
-  // matching the CPU compartmental neuron's thr_mem.
-  const bool above = compartment_voltages[0] >= thresholds[i_neuron];
-  self_spikes[i_neuron] = above && !above_threshold[i_neuron];
-  above_threshold[i_neuron] = above;
-}
-{% endif %}
 }
 
 Compartment{{cm_unique_suffix}}::Compartment{{cm_unique_suffix}}( const long compartment_index, const long parent_index)
@@ -721,45 +651,8 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
     }
   }
 
-  std::vector<int> remaining_children(total_compartment_count);
-  std::vector<int> current_level;
-  std::vector<int> next_level;
-  std::vector<int> downsweep_nodes;
-  downsweep_nodes.reserve(total_compartment_count);
-  for (int node = 0; node < total_compartment_count; ++node)
-  {
-    remaining_children[node] = child_offsets[node + 1] - child_offsets[node];
-    if (remaining_children[node] == 0)
-    {
-      current_level.push_back(node);
-    }
-  }
-
-  downsweep_level_offsets_.clear();
-  while (!current_level.empty())
-  {
-    downsweep_level_offsets_.push_back(static_cast<int>(downsweep_nodes.size()));
-    downsweep_nodes.insert(downsweep_nodes.end(), current_level.begin(), current_level.end());
-    next_level.clear();
-    for (const int node : current_level)
-    {
-      const int parent = parent_index[node];
-      if (parent >= 0)
-      {
-        --remaining_children[parent];
-        if (remaining_children[parent] == 0)
-        {
-          next_level.push_back(parent);
-        }
-      }
-    }
-    current_level.swap(next_level);
-  }
-  downsweep_level_offsets_.push_back(static_cast<int>(downsweep_nodes.size()));
-  if (static_cast<int>(downsweep_nodes.size()) != total_compartment_count)
-  {
-    throw std::runtime_error("Compartment parent relations do not form valid trees");
-  }
+  cm_tree_solver{{cm_unique_suffix}}::validate_topology(
+    parent_index, child_offsets, child_indices, population_compartment_count_);
 
   std::vector<float> matrix_diagonal(total_compartment_count);
   for (int node = 0; node < total_compartment_count; ++node)
@@ -771,14 +664,6 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
   cudaMalloc(&GPU_ca__div__dt, total_compartment_count * sizeof(float));
   cudaMalloc(&GPU_gl__times__el, total_compartment_count * sizeof(float));
   cudaMalloc(&GPU_gg0, total_compartment_count * sizeof(float));
-  cudaMalloc(&GPU_hh, total_compartment_count * sizeof(float));
-  cudaMalloc(&GPU_parent_index, total_compartment_count * sizeof(int));
-  cudaMalloc(&GPU_downsweep_nodes, total_compartment_count * sizeof(int));
-  cudaMalloc(&GPU_child_offsets, (total_compartment_count + 1) * sizeof(int));
-  if (!child_indices.empty())
-  {
-    cudaMalloc(&GPU_child_indices, child_indices.size() * sizeof(int));
-  }
   cudaMalloc(&GPU_gg, total_compartment_count * sizeof(float));
   cudaMalloc(&GPU_ff, total_compartment_count * sizeof(float));
   cudaMalloc(&GPU_mech_g, total_compartment_count * sizeof(float));
@@ -792,14 +677,6 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
   cudaMemcpy(GPU_ca__div__dt, ca__div__dt.data(), total_compartment_count * sizeof(float), cudaMemcpyHostToDevice);
   cudaMemcpy(GPU_gl__times__el, gl__times__el.data(), total_compartment_count * sizeof(float), cudaMemcpyHostToDevice);
   cudaMemcpy(GPU_gg0, matrix_diagonal.data(), total_compartment_count * sizeof(float), cudaMemcpyHostToDevice);
-  cudaMemcpy(GPU_hh, hh.data(), total_compartment_count * sizeof(float), cudaMemcpyHostToDevice);
-  cudaMemcpy(GPU_parent_index, parent_index.data(), total_compartment_count * sizeof(int), cudaMemcpyHostToDevice);
-  cudaMemcpy(GPU_downsweep_nodes, downsweep_nodes.data(), total_compartment_count * sizeof(int), cudaMemcpyHostToDevice);
-  cudaMemcpy(GPU_child_offsets, child_offsets.data(), (total_compartment_count + 1) * sizeof(int), cudaMemcpyHostToDevice);
-  if (!child_indices.empty())
-  {
-    cudaMemcpy(GPU_child_indices, child_indices.data(), child_indices.size() * sizeof(int), cudaMemcpyHostToDevice);
-  }
   cudaMemcpy(GPU_thresholds, thresholds.data(), population_neuron_count_ * sizeof(float), cudaMemcpyHostToDevice);
   cudaMemset(GPU_gg, 0, total_compartment_count * sizeof(float));
   cudaMemset(GPU_ff, 0, total_compartment_count * sizeof(float));
@@ -809,10 +686,8 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
   cudaMemset(GPU_population_above_threshold, 0, population_neuron_count_ * sizeof(bool));
   cudaMemcpy(GPU_population_time_resolution, &time_resolution, sizeof(double), cudaMemcpyHostToDevice);
 
-{% if gpu_tree_solver == 'r_edd' %}
-  r_edd_solver_ = std::make_shared<cm_r_edd{{cm_unique_suffix}}::Solver>();
-  r_edd_solver_->initialize(parent_index, child_offsets, child_indices, hh, population_compartment_count_);
-{% endif %}
+  tree_solver_ = std::make_shared<Solver>();
+  tree_solver_->initialize(parent_index, child_offsets, child_indices, hh, population_compartment_count_);
 
   neuron_currents.initialize_population_runtime(current_groups,
                                                 var_arr,
@@ -830,44 +705,10 @@ CompTree{{cm_unique_suffix}}::initialize_population_runtime(
 void
 CompTree{{cm_unique_suffix}}::enqueue_matrix_solve(cudaStream_t stream)
 {
-{% if gpu_tree_solver == 'r_edd' %}
-  r_edd_solver_->solve(GPU_gg, GPU_ff, GPU_population_vars,
+  // Matrix construction refreshes both scratch inputs before every solve.
+  tree_solver_->solve(GPU_gg, GPU_ff, GPU_population_vars,
                       population_n_var_, compartment_voltage_base_index_,
                       GPU_thresholds, GPU_population_self_spikes, GPU_population_above_threshold, stream);
-{% else %}
-  const int downsweep_block_size = 256;
-  const int level_count = static_cast<int>(downsweep_level_offsets_.size()) - 1;
-  // Level zero contains leaves, whose matrix entries need no elimination.
-  for (int level = 1; level < level_count; ++level)
-  {
-    const int level_begin = downsweep_level_offsets_[level];
-    const int level_node_count = downsweep_level_offsets_[level + 1] - level_begin;
-    const int downsweep_grid_size = (level_node_count + downsweep_block_size - 1) / downsweep_block_size;
-    cm_tree_downsweep_level_kernel<<<downsweep_grid_size, downsweep_block_size, 0, stream>>>(
-      GPU_downsweep_nodes + level_begin,
-      level_node_count,
-      GPU_child_offsets,
-      GPU_child_indices,
-      GPU_hh,
-      GPU_gg,
-      GPU_ff);
-  }
-
-  const int neuron_block_size = 128;
-  const int neuron_grid_size = (population_neuron_count_ + neuron_block_size - 1) / neuron_block_size;
-  cm_tree_solve_root_and_upsweep_kernel<<<neuron_grid_size, neuron_block_size, 0, stream>>>(GPU_population_vars,
-                                                                                           population_n_var_,
-                                                                                           compartment_voltage_base_index_,
-                                                                                           GPU_gg,
-                                                                                           GPU_ff,
-                                                                                           GPU_hh,
-                                                                                           GPU_parent_index,
-                                                                                           population_neuron_count_,
-                                                                                           population_compartment_count_,
-                                                                                           GPU_thresholds,
-                                                                                           GPU_population_self_spikes,
-                                                                                           GPU_population_above_threshold);
-{% endif %}
 }
 
 void
