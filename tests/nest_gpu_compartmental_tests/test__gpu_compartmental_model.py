@@ -15,7 +15,6 @@ import shutil
 import subprocess
 import sys
 
-import nest
 import numpy as np
 import pytest
 
@@ -143,6 +142,7 @@ def cpu_stimulus_spike_times(spike_times):
 
 
 def run_cpu_cm_default(cpu_model):
+    import nest
     nest.ResetKernel()
     nest.Install(cpu_model["module_path"])
     nest.SetKernelStatus({"resolution": DT})

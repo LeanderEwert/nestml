@@ -73,9 +73,16 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
     _default_options["gpu_tree_solver_base_size"] = 32
 
     def __init__(self, options: Optional[Mapping[str, Any]] = None):
-        super().__init__(None)
+        # The GPU pipeline never branches on the NEST version, so it must not
+        # require the ``nest`` Python module for CPU-side version detection. A
+        # neutral sentinel skips the parent's auto-detection; any user-supplied
+        # nest_version is discarded so the option is inert.
+        base_options = {"nest_version": "main"}
         if options:
-            self.set_options(options)
+            base_options.update({k: v for k, v in options.items() if k != "nest_version"})
+        super().__init__(base_options)
+        if options:
+            self.set_options({k: v for k, v in options.items() if k != "nest_version"})
         if not self.option_exists("nest_gpu_path") or not self.get_option("nest_gpu_path"):
             if "NEST_GPU" in os.environ:
                 self.nest_gpu_path = os.environ["NEST_GPU"]
@@ -113,6 +120,12 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
 
     def get_cm_syns_continuouscurrents_file_prefix(self, neuron: ASTModel):
         return "cm_group_continuous_input_currents_" + neuron.get_name()
+
+    def _get_nest_version_namespace(self) -> Dict:
+        # The GPU pipeline never branches on the NEST version, so no version
+        # information is exposed to the templates. Returning an empty dict also
+        # avoids the parent's auto-detection of the installed NEST version.
+        return {}
 
     def _get_module_namespace(self, neurons: Sequence[ASTModel]) -> Dict:
         namespace = super()._get_module_namespace(neurons)

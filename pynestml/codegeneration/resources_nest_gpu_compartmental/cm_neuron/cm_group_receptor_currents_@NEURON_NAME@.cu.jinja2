@@ -246,6 +246,10 @@ void {{receptor_name}}{{cm_unique_suffix}}::new_receptor(std::size_t comp_ass, c
 
 void {{receptor_name}}{{cm_unique_suffix}}::calibrate(double time_resolution)
 {
+  if (neuron_{{ receptor_name }}_receptor_count == 0)
+  {
+    return;
+  }
 
     std::vector< double > {{ printer_no_origin.print(receptor_info["analytic_helpers"]["__h"]["ASTVariable"]) }}(neuron_{{ receptor_name }}_receptor_count, time_resolution);
 

@@ -1,0 +1,101 @@
+/* This file is part of NEST. Copyright (C) 2004 The NEST Initiative.
+ * Licensed under the GNU General Public License, version 2 or later.
+ */
+namespace cm_hines{{cm_unique_suffix}}
+{
+__global__ void cm_tree_downsweep_level_kernel(const int* level_nodes,
+                                              int level_node_count,
+                                              const int* child_offsets,
+                                              const int* child_indices,
+                                              const float* hh,
+                                              float* gg,
+                                              float* ff)
+{
+  const int level_index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (level_index >= level_node_count)
+  {
+    return;
+  }
+
+  downsweep_node(level_nodes[level_index], child_offsets, child_indices, hh, gg, ff);
+}
+
+__global__ void cm_tree_solve_root_and_upsweep_kernel(float* population_vars,
+                                                     int n_var,
+                                                     int compartment_voltage_base_index,
+                                                     const float* gg,
+                                                     const float* ff,
+                                                     const float* hh,
+                                                     const int* parent_index,
+                                                     int neuron_count,
+                                                     int compartment_count,
+                                                     const float* thresholds,
+                                                     int* self_spikes,
+                                                     bool* above_threshold)
+{
+  const int i_neuron = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i_neuron >= neuron_count || compartment_count <= 0)
+  {
+    return;
+  }
+
+  solve_root_and_upsweep(i_neuron, population_vars, n_var, compartment_voltage_base_index,
+                         gg, ff, hh, parent_index, compartment_count, thresholds,
+                         self_spikes, above_threshold);
+}
+
+void Solver::initialize(const std::vector<int>& parents, const std::vector<int>& child_offsets,
+                        const std::vector<int>& child_indices, const std::vector<float>& coupling,
+                        int compartments_per_neuron)
+{
+  Plan plan;
+  plan.build(parents, child_offsets, child_indices, compartments_per_neuron);
+  if (coupling.size() != parents.size())
+  {
+    throw std::runtime_error("Hines coupling and parent sizes differ");
+  }
+  // The population tree destroys its graph before replacing solver buffers.
+  std::unique_ptr<Workspace> workspace(new Workspace());
+  workspace->parents.upload(parents);
+  workspace->child_offsets.upload(child_offsets);
+  workspace->child_indices.upload(child_indices);
+  workspace->downsweep_nodes.upload(plan.downsweep_nodes);
+  workspace->coupling.upload(coupling);
+  workspace->level_offsets = std::move(plan.level_offsets);
+  workspace->neuron_count = static_cast<int>(parents.size()) / compartments_per_neuron;
+  workspace->compartments_per_neuron = compartments_per_neuron;
+  workspace_ = std::move(workspace);
+}
+
+void Solver::solve(float* diagonal, float* rhs, float* population_vars,
+                   int n_var, int voltage_base, const float* thresholds, int* self_spikes,
+                   bool* above_threshold, cudaStream_t stream)
+{
+  const int downsweep_block_size = 256;
+  const int level_count = static_cast<int>(workspace_->level_offsets.size()) - 1;
+  // Level zero contains leaves, whose matrix entries need no elimination.
+  for (int level = 1; level < level_count; ++level)
+  {
+    const int level_begin = workspace_->level_offsets[level];
+    const int level_node_count = workspace_->level_offsets[level + 1] - level_begin;
+    const int downsweep_grid_size = (level_node_count + downsweep_block_size - 1) / downsweep_block_size;
+    cm_tree_downsweep_level_kernel<<<downsweep_grid_size, downsweep_block_size, 0, stream>>>(
+      workspace_->downsweep_nodes.data + level_begin,
+      level_node_count,
+      workspace_->child_offsets.data,
+      workspace_->child_indices.data,
+      workspace_->coupling.data,
+      diagonal,
+      rhs);
+  }
+
+  const int neuron_block_size = 128;
+  const int neuron_grid_size = (workspace_->neuron_count + neuron_block_size - 1) / neuron_block_size;
+  cm_tree_solve_root_and_upsweep_kernel<<<neuron_grid_size, neuron_block_size, 0, stream>>>(
+    population_vars, n_var, voltage_base, diagonal, rhs,
+    workspace_->coupling.data, workspace_->parents.data,
+    workspace_->neuron_count, workspace_->compartments_per_neuron,
+    thresholds, self_spikes, above_threshold);
+  check_cuda(cudaGetLastError());
+}
+}

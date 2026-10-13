@@ -1,0 +1,50 @@
+/* This file is part of NEST. Copyright (C) 2004 The NEST Initiative.
+ * Licensed under the GNU General Public License, version 2 or later.
+ */
+{% include 'solver/topology.h.jinja2' %}
+
+namespace cm_hines{{cm_unique_suffix}}
+{
+struct Plan
+{
+  std::vector<int> downsweep_nodes, level_offsets;
+
+  void build(const std::vector<int>& parents, const std::vector<int>& child_offsets,
+             const std::vector<int>& child_indices, int compartments_per_neuron)
+  {
+    cm_tree_solver{{cm_unique_suffix}}::validate_topology(
+      parents, child_offsets, child_indices, compartments_per_neuron);
+    const int size = static_cast<int>(parents.size());
+    std::vector<int> remaining_children(size);
+    std::vector<int> current_level;
+    std::vector<int> next_level;
+    downsweep_nodes.clear();
+    level_offsets.clear();
+    downsweep_nodes.reserve(size);
+    for (int node = 0; node < size; ++node)
+    {
+      remaining_children[node] = child_offsets[node + 1] - child_offsets[node];
+      if (remaining_children[node] == 0)
+      {
+        current_level.push_back(node);
+      }
+    }
+    while (!current_level.empty())
+    {
+      level_offsets.push_back(static_cast<int>(downsweep_nodes.size()));
+      downsweep_nodes.insert(downsweep_nodes.end(), current_level.begin(), current_level.end());
+      next_level.clear();
+      for (const int node : current_level)
+      {
+        const int parent = parents[node];
+        if (parent >= 0 && --remaining_children[parent] == 0)
+        {
+          next_level.push_back(parent);
+        }
+      }
+      current_level.swap(next_level);
+    }
+    level_offsets.push_back(static_cast<int>(downsweep_nodes.size()));
+  }
+};
+}

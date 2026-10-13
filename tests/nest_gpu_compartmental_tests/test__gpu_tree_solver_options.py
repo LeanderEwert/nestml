@@ -18,11 +18,11 @@ from pynestml.frontend.pynestml_frontend import generate_nest_gpu_compartmental_
 ])
 def test_invalid_solver_options(option, value):
     with pytest.raises(ValueError, match=option):
-        NESTGPUCompartmentalCodeGenerator({"nest_version": "v3", option: value})
+        NESTGPUCompartmentalCodeGenerator({option: value})
 
 
 def test_default_solver_options():
-    generator = NESTGPUCompartmentalCodeGenerator({"nest_version": "v3"})
+    generator = NESTGPUCompartmentalCodeGenerator({})
     assert generator.get_option("gpu_tree_solver") == "hines"
     assert generator.get_option("gpu_tree_solver_chain_length") == 3
     assert generator.get_option("gpu_tree_solver_base_size") == 32
@@ -37,7 +37,7 @@ def generated_solver(request, tmp_path_factory):
     src.mkdir(parents=True)
     (src / "CMakeLists.txt").write_text("# <<BEGIN_NESTML_GENERATED>>\n# <<END_NESTML_GENERATED>>\n")
     target = tmp_path / "generated"
-    options = dict(nest_gpu_path=str(gpu), register_neuron_model=False, skip_build=True, nest_version="v3")
+    options = dict(nest_gpu_path=str(gpu), register_neuron_model=False, skip_build=True)
     if solver is not None:
         options["gpu_tree_solver"] = solver
     if solver == "r_edd":

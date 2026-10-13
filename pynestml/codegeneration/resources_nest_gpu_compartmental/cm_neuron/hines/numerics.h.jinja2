@@ -1,0 +1,56 @@
+/* This file is part of NEST. Copyright (C) 2004 The NEST Initiative.
+ * Licensed under the GNU General Public License, version 2 or later.
+ */
+namespace cm_hines{{cm_unique_suffix}}
+{
+// Host checks and CUDA kernels use these same scalar routines. Child order,
+// elimination order, voltage layout, and threshold history match plain Hines.
+#ifdef __CUDACC__
+__host__ __device__
+#endif
+inline void downsweep_node(int node, const int* child_offsets,
+                           const int* child_indices, const float* hh,
+                           float* gg, float* ff)
+{
+  float node_g = gg[node];
+  float node_f = ff[node];
+  for (int child_entry = child_offsets[node + 1] - 1; child_entry >= child_offsets[node]; --child_entry)
+  {
+    const int child = child_indices[child_entry];
+    const float factor = hh[child] / gg[child];
+    node_g -= hh[child] * factor;
+    node_f -= ff[child] * factor;
+  }
+  gg[node] = node_g;
+  ff[node] = node_f;
+}
+
+#ifdef __CUDACC__
+__host__ __device__
+#endif
+inline void solve_root_and_upsweep(int i_neuron, float* population_vars,
+                                   int n_var, int compartment_voltage_base_index,
+                                   const float* gg, const float* ff, const float* hh,
+                                   const int* parent_index, int compartment_count,
+                                   const float* thresholds, int* self_spikes,
+                                   bool* above_threshold)
+{
+  const int compartment_base = i_neuron * compartment_count;
+  float* compartment_voltages =
+    population_vars + i_neuron * n_var + compartment_voltage_base_index;
+  compartment_voltages[0] = ff[compartment_base] / gg[compartment_base];
+  for (int local = 1; local < compartment_count; ++local)
+  {
+    const int i = compartment_base + local;
+    const int parent = parent_index[i];
+    const int parent_local = parent - compartment_base;
+    const float parent_v = parent >= 0 ? compartment_voltages[parent_local] : 0.0f;
+    compartment_voltages[local] = (ff[i] - parent_v * hh[i]) / gg[i];
+  }
+  // Remember the last threshold decision across externally assigned voltages,
+  // matching the CPU compartmental neuron's thr_mem.
+  const bool above = compartment_voltages[0] >= thresholds[i_neuron];
+  self_spikes[i_neuron] = above && !above_threshold[i_neuron];
+  above_threshold[i_neuron] = above;
+}
+}

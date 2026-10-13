@@ -1,0 +1,38 @@
+/* This file is part of NEST. Copyright (C) 2004 The NEST Initiative.
+ * Licensed under the GNU General Public License, version 2 or later.
+ */
+#include <memory>
+#include <utility>
+{% include 'solver/device.h.jinja2' %}
+{% include 'hines/plan.h.jinja2' %}
+{% include 'hines/numerics.h.jinja2' %}
+
+namespace cm_hines{{cm_unique_suffix}}
+{
+using cm_tree_solver{{cm_unique_suffix}}::DeviceBuffer;
+using cm_tree_solver{{cm_unique_suffix}}::check_cuda;
+
+class Solver
+{
+public:
+  void initialize(const std::vector<int>& parents, const std::vector<int>& child_offsets,
+                  const std::vector<int>& child_indices, const std::vector<float>& coupling,
+                  int compartments_per_neuron);
+  // Both inputs are timestep scratch: Hines eliminates them in place.
+  // No allocations, transfers, or synchronization are performed during solve.
+  void solve(float* diagonal, float* rhs, float* population_vars,
+             int n_var, int voltage_base, const float* thresholds, int* self_spikes,
+             bool* above_threshold, cudaStream_t stream);
+
+private:
+  struct Workspace
+  {
+    DeviceBuffer<int> parents, child_offsets, child_indices, downsweep_nodes;
+    DeviceBuffer<float> coupling;
+    std::vector<int> level_offsets;
+    int neuron_count = 0;
+    int compartments_per_neuron = 0;
+  };
+  std::unique_ptr<Workspace> workspace_;
+};
+}

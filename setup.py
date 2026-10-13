@@ -69,7 +69,15 @@ setup(
                                "codegeneration/resources_genn/*.jinja2",
                                "codegeneration/resources_genn/directives_cpp/*.jinja2",
                                "codegeneration/resources_nest_gpu/point_neuron/*.jinja2",
-                               "codegeneration/resources_nest_gpu/point_neuron/directives/*.jinja2"]},
+                               "codegeneration/resources_nest_gpu/point_neuron/directives/*.jinja2",
+                               "codegeneration/resources_nest_gpu_compartmental/cm_neuron/*.jinja2",
+                               "codegeneration/resources_nest_gpu_compartmental/cm_neuron/cm_directives_cpp/*.jinja2",
+                               "codegeneration/resources_nest_gpu_compartmental/cm_neuron/directives_cpp/*.jinja2",
+                               "codegeneration/resources_nest_gpu_compartmental/cm_neuron/hines/*.jinja2",
+                               "codegeneration/resources_nest_gpu_compartmental/cm_neuron/r_edd/*.jinja2",
+                               "codegeneration/resources_nest_gpu_compartmental/cm_neuron/setup/*.jinja2",
+                               "codegeneration/resources_nest_gpu_compartmental/cm_neuron/setup/common/*.jinja2",
+                               "codegeneration/resources_nest_gpu_compartmental/cm_neuron/solver/*.jinja2"]},
     data_files=data_files,
     entry_points={
         "console_scripts": [
