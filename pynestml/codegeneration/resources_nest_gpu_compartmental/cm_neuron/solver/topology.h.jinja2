@@ -1,0 +1,72 @@
+/* This file is part of NEST. Copyright (C) 2004 The NEST Initiative.
+ * Licensed under the GNU General Public License, version 2 or later.
+ */
+#ifndef CM_TREE_SOLVER_TOPOLOGY_{{cm_unique_suffix | upper}}_H
+#define CM_TREE_SOLVER_TOPOLOGY_{{cm_unique_suffix | upper}}_H
+#include <stdexcept>
+#include <vector>
+
+namespace cm_tree_solver{{cm_unique_suffix}}
+{
+// Validate the population forest independently of either solver's execution plan.
+inline void validate_topology(const std::vector<int>& parents,
+                              const std::vector<int>& child_offsets,
+                              const std::vector<int>& child_indices,
+                              int compartments_per_neuron)
+{
+  if (compartments_per_neuron < 1 || parents.empty()
+      || parents.size() % compartments_per_neuron != 0
+      || child_offsets.size() != parents.size() + 1
+      || child_offsets.front() != 0
+      || child_offsets.back() != static_cast<int>(child_indices.size()))
+  {
+    throw std::runtime_error("Invalid compartmental population topology dimensions");
+  }
+  const int size = static_cast<int>(parents.size());
+  std::vector<int> remaining_children(size);
+  std::vector<int> pending;
+  pending.reserve(size);
+  for (int node = 0; node < size; ++node)
+  {
+    const int base = node / compartments_per_neuron * compartments_per_neuron;
+    const int parent = parents[node];
+    if ((node == base && parent != -1)
+        || (node != base && (parent < base || parent >= base + compartments_per_neuron)))
+    {
+      throw std::runtime_error("Compartmental GPU trees require one root at index 0 and parents within each neuron");
+    }
+    if (child_offsets[node] < 0 || child_offsets[node] > child_offsets[node + 1]
+        || child_offsets[node + 1] > static_cast<int>(child_indices.size()))
+    {
+      throw std::runtime_error("Invalid compartment child offsets");
+    }
+    remaining_children[node] = child_offsets[node + 1] - child_offsets[node];
+    for (int entry = child_offsets[node]; entry < child_offsets[node + 1]; ++entry)
+    {
+      const int child = child_indices[entry];
+      if (child < 0 || child >= size || parents[child] != node)
+      {
+        throw std::runtime_error("Compartment child adjacency does not match parent relations");
+      }
+    }
+    if (remaining_children[node] == 0)
+    {
+      pending.push_back(node);
+    }
+  }
+  // Remove leaves until every node has been visited. A cycle leaves nodes behind.
+  for (std::size_t entry = 0; entry < pending.size(); ++entry)
+  {
+    const int parent = parents[pending[entry]];
+    if (parent >= 0 && --remaining_children[parent] == 0)
+    {
+      pending.push_back(parent);
+    }
+  }
+  if (pending.size() != parents.size())
+  {
+    throw std::runtime_error("Compartment parent relations do not form valid trees");
+  }
+}
+}
+#endif

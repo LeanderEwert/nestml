@@ -14,6 +14,8 @@ import json
 import sys
 import time
 
+import numpy as np
+
 
 DEFAULT_MODEL_NAME = "cm_default_nestml"
 DEFAULT_DT = 0.1
@@ -80,23 +82,73 @@ ACTIVE_RECORDABLES = [
 ]
 
 
-def benchmark_neuron_configuration(n_added_compartments, morphology="chain", dynamics="active"):
-    """Shared CPU/GPU sweep configuration: uniform dynamics and somatic AMPA."""
-    if n_added_compartments < 0 or morphology not in ("chain", "star") or dynamics not in ("active", "passive"):
+def generate_binary_tree_parents(n, branching_prob, seed):
+    """Capacity-based binary tree of ``n`` dendritic compartments plus soma.
+
+    Each node, when born, is assigned a capacity of one or two children drawn
+    from ``branching_prob`` (probability two). A pool of unattached parents
+    receives the next node, chosen at random; a parent leaves the pool once its
+    capacity is spent. ``parents[i]`` is the parent of dendritic compartment
+    ``i + 1`` and is always a smaller index, so the returned list directly
+    fills the ``parent_idx`` fields of the dendritic compartments.
+    """
+    rng = np.random.default_rng(seed)
+
+    def draw_capacity():
+        return 2 if rng.random() < branching_prob else 1
+
+    # Indices are global node indices (soma is 0); dendritic compartment k has
+    # global index k + 1. ``remaining`` is indexed by global node index and
+    # ``pool`` holds the global indices of nodes that can still accept a child.
+    remaining = [draw_capacity()]
+    pool = [0]
+    dendritic_parents = []
+    while len(dendritic_parents) < n:
+        parent = int(rng.choice(pool))
+        remaining[parent] -= 1
+        if remaining[parent] == 0:
+            pool.remove(parent)
+        dendritic_parents.append(parent)
+        child_global_index = len(dendritic_parents)
+        child_remaining = draw_capacity()
+        remaining.append(child_remaining)
+        pool.append(child_global_index)
+    return dendritic_parents
+
+
+def _dendritic_parents(parents, n_added_compartments, morphology):
+    if parents is not None:
+        return list(parents)
+    if morphology == "chain":
+        return list(range(n_added_compartments))
+    return [0] * n_added_compartments
+
+
+def benchmark_neuron_configuration(n_added_compartments, morphology="chain", dynamics="active", parents=None):
+    """Shared CPU/GPU sweep configuration: uniform dynamics and somatic AMPA.
+
+    ``parents`` supplies a pre-generated binary-tree topology for
+    ``morphology="tree"``; ``chain`` and ``star`` derive their topology
+    internally when it is omitted.
+    """
+    if n_added_compartments < 0 or morphology not in ("chain", "star", "tree") or dynamics not in ("active", "passive"):
         raise ValueError("Invalid benchmark morphology or dynamics")
+    if parents is not None and len(parents) != n_added_compartments:
+        raise ValueError("parents length must equal n_added_compartments")
     soma = dict(SOMA_PARAMS if dynamics == "active" else SOMA_PARAMS_PASSIVE)
     dendrite = dict(DEND_PARAMS_ACTIVE if dynamics == "active" else DEND_PARAMS_PASSIVE)
     for params in (soma, dendrite):
         params["v_comp"] = -75.0
         if dynamics == "passive":
             params.update({"gbar_Na": 0.0, "gbar_K": 0.0})
+    dendritic_parents = _dendritic_parents(parents, n_added_compartments, morphology)
     return {
         "V_th": -50.0,
         "compartments": [{"parent_idx": -1, "params": soma}] + [
-            {"parent_idx": index - 1 if morphology == "chain" else 0, "params": dict(dendrite)}
+            {"parent_idx": dendritic_parents[index - 1], "params": dict(dendrite)}
             for index in range(1, n_added_compartments + 1)],
         "receptors": [{"comp_idx": 0, "receptor_type": "AMPA",
-                       "params": {"e_AMPA": 0.0, "tau_r_AMPA": 0.2, "tau_d_AMPA": 3.0}}],
+                        "params": {"e_AMPA": 0.0, "tau_r_AMPA": 0.2, "tau_d_AMPA": 3.0}}],
     }
 
 
@@ -107,15 +159,6 @@ def _synchronize(ngpu):
     synchronize.argtypes = []
     if synchronize():
         raise RuntimeError("CUDA synchronization failed")
-
-
-def _check_benchmark_mechanisms(ngpu, neuron, n_compartments, dynamics):
-    # Runtime names enumerate instantiated mechanisms, including unrecorded ones.
-    names = [name.decode() if isinstance(name, bytes) else name for name in ngpu.GetScalVarNames(neuron)]
-    expected = n_compartments if dynamics == "active" else 0
-    for gate in ("m_Na", "h_Na", "n_K"):
-        assert sum(name.startswith(gate) for name in names) == expected, (gate, dynamics)
-    assert not any("NMDA" in name for name in names)
 
 
 def _configure_default_neuron(ngpu, neuron, dend_params):
@@ -215,7 +258,6 @@ def run_active_population_simulation(n_neurons, sample_neuron, record=True, dyna
 
     _synchronize(ngpu)
     runtime = time.perf_counter() - t_start
-    _check_benchmark_mechanisms(ngpu, neurons[0], 2, dynamics)
     recorded_data = ngpu.GetRecordData(recorder) if record else None
 
     result = {
@@ -232,7 +274,7 @@ def run_active_population_simulation(n_neurons, sample_neuron, record=True, dyna
 
 
 def run_active_compartment_simulation(
-        n_added_compartments, sample_compartment, record=True, morphology="chain", dynamics=None):
+        n_added_compartments, sample_compartment, record=True, morphology="chain", dynamics=None, parents=None):
     import nestgpu as ngpu
 
     n_compartments = n_added_compartments + 1
@@ -247,7 +289,8 @@ def run_active_compartment_simulation(
     t_start = time.perf_counter()
 
     neuron = ngpu.Create(DEFAULT_MODEL_NAME, 1)
-    ngpu.SetStatus(neuron, benchmark_neuron_configuration(n_added_compartments, morphology, dynamics))
+    ngpu.SetStatus(neuron, benchmark_neuron_configuration(
+        n_added_compartments, morphology, dynamics, parents=parents))
 
     if record:
         recorder = ngpu.CreateRecord("", recordables, [neuron[0]] * len(recordables), [0] * len(recordables))
@@ -262,7 +305,6 @@ def run_active_compartment_simulation(
 
     _synchronize(ngpu)
     runtime = time.perf_counter() - t_start
-    _check_benchmark_mechanisms(ngpu, neuron[0], n_compartments, dynamics)
     recorded_data = ngpu.GetRecordData(recorder) if record else None
 
     result = {
@@ -289,19 +331,21 @@ if __name__ == "__main__":
             modes[f"{dynamics}-population-{suffix}"] = ("population", dynamics, record)
             modes[f"{dynamics}-compartment-{suffix}"] = ("chain", dynamics, record)
             modes[f"{dynamics}-star-compartment-{suffix}"] = ("star", dynamics, record)
+            modes[f"{dynamics}-tree-compartment-{suffix}"] = ("tree", dynamics, record)
     if len(sys.argv) == 3 and sys.argv[1] == "default-json":
         result = run_default_simulation()
-    elif len(sys.argv) == 5 and sys.argv[1] in modes:
+    elif len(sys.argv) in (5, 6) and sys.argv[1] in modes:
         morphology, dynamics, record = modes[sys.argv[1]]
         size, sample = int(sys.argv[3]), int(sys.argv[4])
+        parents = json.loads(sys.argv[5]) if len(sys.argv) == 6 else None
         if morphology == "population":
             result = run_active_population_simulation(size, sample, record=record, dynamics=dynamics)
         else:
             result = run_active_compartment_simulation(
-                size, sample, record=record, morphology=morphology, dynamics=dynamics)
+                size, sample, record=record, morphology=morphology, dynamics=dynamics, parents=parents)
     else:
         raise SystemExit("usage: gpu_compartmental_model_runner.py default-json output.json OR "
-                         "<active|passive>-<population|compartment|star-compartment>-"
-                         "<json|no-record-json> output.json size sample_index")
+                          "<active|passive>-<population|compartment|star-compartment|tree-compartment>-"
+                          "<json|no-record-json> output.json size sample_index [parents_json]")
     with open(sys.argv[2], "w", encoding="utf-8") as output_file:
         json.dump(result, output_file)

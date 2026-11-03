@@ -132,7 +132,7 @@ void Solver::solve(float* diagonal, float* rhs, float* population_vars,
   {
     DeviceLevel& a = *levels_[depth];
     DeviceLevel& reduced = *levels_[depth + 1];
-    const int count = std::max(a.chains, a.junction_count);
+    const int count = (a.chains > a.junction_count) ? a.chains : a.junction_count;
     reconstruct_kernel<<<(count + block - 1) / block, block, 0, stream>>>(
       a.view(), reduced.view(), a.chains, a.junction_count);
   }

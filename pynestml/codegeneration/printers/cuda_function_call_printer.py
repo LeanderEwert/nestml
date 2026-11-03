@@ -82,10 +82,10 @@ class CUDAFunctionCallPrinter(FunctionCallPrinter):
         function_name = function_call.get_name()
 
         if function_name == PredefinedFunctions.MAX:
-            return "max({!s}, {!s})"
+            return "fmax({!s}, {!s})"
 
         if function_name == PredefinedFunctions.MIN:
-            return "min({!s}, {!s})"
+            return "fmin({!s}, {!s})"
 
         if function_name == PredefinedFunctions.EXP:
             return "exp({!s})"
@@ -106,7 +106,7 @@ class CUDAFunctionCallPrinter(FunctionCallPrinter):
             return "tanh({!s})"
 
         if function_name == PredefinedFunctions.ERF:
-            return "std::erf({!s})"
+            return "erf({!s})"
 
         if function_name == PredefinedFunctions.POW:
             return "pow({!s}, {!s})"

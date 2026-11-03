@@ -61,6 +61,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
                 "cm_group_currents_@NEURON_NAME@.h.jinja2",
                 "cm_tree_@NEURON_NAME@.cu.jinja2",
                 "cm_tree_@NEURON_NAME@.h.jinja2",
+                "fastexp.h.jinja2",
             ]
         },
         "module_templates": [],
@@ -151,6 +152,7 @@ class NESTGPUCompartmentalCodeGenerator(NESTCompartmentalCodeGenerator):
             "continuouscurrents": self.get_cm_syns_continuouscurrents_file_prefix(neuron),
         })
         namespace["cuda_printer"] = _CompartmentalCUDAPrinter(neuron, self._printer_no_origin)
+        namespace["cuda_printer_propagator"] = _CompartmentalCUDAPrinter(neuron, self._printer_no_origin_propagator)
         for synapse_info in namespace["syns_info"].values():
             namespace["cuda_printer"].parameter_names.update(synapse_info["Parameters"])
             namespace["cuda_printer"].parameter_names.update(
@@ -348,8 +350,6 @@ class _CompartmentalCUDAPrinter:
                     "param[i_" + parameter_name + param_suffix)
         for variable_name in black_list:
             code = code.replace(array_name + "[i_" + variable_name + suffix, variable_name)
-        # std::min/max are host-only with the supported CUDA toolchain.
-        code = code.replace("std::min(", "fmin(").replace("std::max(", "fmax(")
         return code
 
     def printer(self, index: str = "i", black_list=None, stride: Optional[str] = None,

@@ -1,0 +1,46 @@
+/* This file is part of NEST. Copyright (C) 2004 The NEST Initiative.
+ * Licensed under the GNU General Public License, version 2 or later.
+ */
+#ifndef CM_TREE_SOLVER_DEVICE_{{cm_unique_suffix | upper}}_H
+#define CM_TREE_SOLVER_DEVICE_{{cm_unique_suffix | upper}}_H
+#include <cuda_runtime.h>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace cm_tree_solver{{cm_unique_suffix}}
+{
+inline void check_cuda(cudaError_t status)
+{
+  if (status != cudaSuccess)
+  {
+    throw std::runtime_error(std::string("Tree solver CUDA error: ") + cudaGetErrorString(status));
+  }
+}
+
+template<typename T> struct DeviceBuffer
+{
+  T* data = nullptr;
+  DeviceBuffer() = default;
+  DeviceBuffer(const DeviceBuffer&) = delete;
+  DeviceBuffer& operator=(const DeviceBuffer&) = delete;
+  ~DeviceBuffer() { cudaFree(data); }
+
+  void allocate(size_t size)
+  {
+    if (size > 0)
+    {
+      check_cuda(cudaMalloc(reinterpret_cast<void**>(&data), size * sizeof(T)));
+    }
+  }
+  void upload(const std::vector<T>& values)
+  {
+    allocate(values.size());
+    if (!values.empty())
+    {
+      check_cuda(cudaMemcpy(data, values.data(), values.size() * sizeof(T), cudaMemcpyHostToDevice));
+    }
+  }
+};
+}
+#endif

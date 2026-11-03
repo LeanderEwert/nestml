@@ -53,8 +53,41 @@ if TEST_PLOTS:
     import matplotlib.pyplot as plt
 
 
+@pytest.fixture(scope="module", params=["default", "fastexp"])
+def benchmark_models(request):
+    """cm_default CPU + NEST-GPU modules for one benchmark variant.
+
+    The GPU module is rebuilt in place for each variant so the ``default`` and
+    ``fastexp`` variants share a single install; ``use_fastexp`` only changes the
+    generated propagator code, not the installed model name. Parametrizing here
+    (rather than adding a second fixture) keeps both variants aligned.
+    """
+    variant = request.param
+    target_path = os.path.join(TESTS_PATH, "target")
+    nest_gpu_path = os.environ.get("NEST_GPU", os.getcwd())
+    assert os.path.isdir(os.path.join(nest_gpu_path, "src"))
+
+    if os.environ.get(SKIP_REBUILD_ENV) in ("1", "true", "True", "yes", "YES"):
+        os.makedirs(target_path, exist_ok=True)
+        print(f"Skipping cm_default_nestml rebuild because {SKIP_REBUILD_ENV} is set")
+    else:
+        generate_gpu_default_model(target_path, codegen_opts={
+            "gpu_tree_solver": "r_edd",
+            "gpu_tree_solver_chain_length": 3,
+            "gpu_tree_solver_base_size": 32,
+            "use_fastexp": variant == "fastexp",
+        })
+
+    return {
+        "variant": variant,
+        "cpu": request.getfixturevalue("cpu_model_variant"),
+        "gpu_path": target_path,
+    }
+
+
 @pytest.fixture(scope="module")
 def benchmark_target_path():
+    # Retained for the profiling module, which only needs the default variant.
     target_path = os.path.join(TESTS_PATH, "target")
     nest_gpu_path = os.environ.get("NEST_GPU", os.getcwd())
     assert os.path.isdir(os.path.join(nest_gpu_path, "src"))
@@ -198,13 +231,13 @@ def compare_compartment_traces(cpu, gpu, compartment, dynamics):
     compare_trace(cpu["traces"], gpu["traces"], variable, variable, atol=atol)
 
 
-def plot_population_benchmark(results, output_dir, dynamics):
+def plot_population_benchmark(results, output_dir, variant, dynamics):
     if not TEST_PLOTS:
         print(f"Skipping GPU compartmental benchmark plot: matplotlib is unavailable ({PLOT_IMPORT_ERROR})")
         return
 
     os.makedirs(output_dir, exist_ok=True)
-    output_path = os.path.join(output_dir, f"gpu_compartmental_{dynamics}_population_benchmark.png")
+    output_path = os.path.join(output_dir, f"gpu_compartmental_{variant}_{dynamics}_population_benchmark.png")
     print(f"Writing GPU compartmental benchmark plot to {output_path}")
 
     n_neurons = np.asarray([result["n_neurons"] for result in results], dtype=int)
@@ -217,14 +250,14 @@ def plot_population_benchmark(results, output_dir, dynamics):
     relative_no_record_runtimes = gpu_no_record_runtimes / cpu_no_record_runtimes
 
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(n_neurons, relative_runtimes, marker="o", label="with recording")
-    ax.plot(n_neurons, relative_no_record_runtimes, marker="s", label="without recording")
+    ax.plot(n_neurons, relative_runtimes, marker="o", label=f"{variant} with recording")
+    ax.plot(n_neurons, relative_no_record_runtimes, marker="s", label=f"{variant} without recording")
     ax.axhline(1.0, color="grey", lw=1.0, ls="--")
     ax.set_xscale("log", base=2)
     ax.set_yscale("log", base=2)
     ax.set_xlabel("population size")
     ax.set_ylabel("relative runtime")
-    ax.set_title(f"cm_default {dynamics} population benchmark")
+    ax.set_title(f"cm_default {variant} {dynamics} population benchmark")
     ax.grid(True, which="both", alpha=0.3)
     ax.legend(loc=0)
     plt.tight_layout()
@@ -232,13 +265,13 @@ def plot_population_benchmark(results, output_dir, dynamics):
     plt.close(fig)
 
 
-def plot_compartment_benchmark(results, output_dir, morphology="chain", dynamics="active"):
+def plot_compartment_benchmark(results, output_dir, variant, morphology="chain", dynamics="active"):
     if not TEST_PLOTS:
         print(f"Skipping GPU compartmental compartment benchmark plot: matplotlib is unavailable ({PLOT_IMPORT_ERROR})")
         return
 
     os.makedirs(output_dir, exist_ok=True)
-    output_filename = f"gpu_compartmental_{dynamics}_{morphology}_compartment_benchmark.png"
+    output_filename = f"gpu_compartmental_{variant}_{dynamics}_{morphology}_compartment_benchmark.png"
     output_path = os.path.join(output_dir, output_filename)
     print(f"Writing GPU compartmental compartment benchmark plot to {output_path}")
 
@@ -252,19 +285,74 @@ def plot_compartment_benchmark(results, output_dir, morphology="chain", dynamics
     relative_no_record_runtimes = gpu_no_record_runtimes / cpu_no_record_runtimes
 
     fig, ax = plt.subplots(figsize=(7, 4))
-    ax.plot(n_compartments, relative_runtimes, marker="o", label="with recording")
-    ax.plot(n_compartments, relative_no_record_runtimes, marker="s", label="without recording")
+    ax.plot(n_compartments, relative_runtimes, marker="o", label=f"{variant} with recording")
+    ax.plot(n_compartments, relative_no_record_runtimes, marker="s", label=f"{variant} without recording")
     ax.axhline(1.0, color="grey", lw=1.0, ls="--")
     ax.set_xscale("log", base=2)
     ax.set_yscale("log", base=2)
     ax.set_xlabel("added dendritic compartment count")
     ax.set_ylabel("relative runtime")
-    ax.set_title(f"cm_default {dynamics} {morphology} compartment benchmark")
+    ax.set_title(f"cm_default {variant} {dynamics} {morphology} compartment benchmark")
     ax.grid(True, which="both", alpha=0.3)
     ax.legend(loc=0)
     plt.tight_layout()
     plt.savefig(output_path)
     plt.close(fig)
+
+
+def _load_benchmark_results(target_path, variant, dynamics, kind):
+    json_path = os.path.join(
+        target_path, f"gpu_compartmental_{variant}_{dynamics}_{kind}_benchmark.json")
+    if not os.path.isfile(json_path):
+        return None
+    with open(json_path, encoding="utf-8") as input_file:
+        return json.load(input_file)
+
+
+def _plot_all_variants(target_path, dynamics, kind, x_label):
+    if not TEST_PLOTS:
+        print(f"Skipping GPU compartmental all-variants benchmark plot: matplotlib is unavailable ({PLOT_IMPORT_ERROR})")
+        return
+
+    os.makedirs(target_path, exist_ok=True)
+    output_path = os.path.join(
+        target_path, f"gpu_compartmental_{dynamics}_{kind}_benchmark_all_variants.png")
+    print(f"Writing GPU compartmental all-variants benchmark plot to {output_path}")
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    for variant in ("default", "fastexp"):
+        results = _load_benchmark_results(target_path, variant, dynamics, kind)
+        if results is None:
+            continue
+        x = np.asarray(
+            [r["n_neurons"] if kind == "population" else r["n_added_compartments"] for r in results], dtype=int)
+        gpu_runtimes = np.asarray([r["gpu_runtime"] for r in results], dtype=float)
+        cpu_runtimes = np.asarray([r["cpu_runtime"] for r in results], dtype=float)
+        relative_runtimes = gpu_runtimes / cpu_runtimes
+        ax.plot(x, relative_runtimes, marker="o", label=f"{variant} with recording")
+    ax.axhline(1.0, color="grey", lw=1.0, ls="--")
+    ax.set_xscale("log", base=2)
+    ax.set_yscale("log", base=2)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel("relative runtime")
+    ax.set_title(f"cm_default {dynamics} {kind} benchmark: default vs fastexp")
+    ax.grid(True, which="both", alpha=0.3)
+    ax.legend(loc=0)
+    plt.tight_layout()
+    plt.savefig(output_path)
+    plt.close(fig)
+
+
+def pytest_sessionfinish(session, exit_status):
+    # After every test has run, draw a combined default-vs-fastexp plot for each
+    # (dynamics, kind) so the two variants are compared in a single figure.
+    if not TEST_PLOTS:
+        return
+    target_path = os.path.join(TESTS_PATH, "target")
+    for dynamics in ("active", "passive"):
+        _plot_all_variants(target_path, dynamics, "population", "population size")
+        _plot_all_variants(target_path, dynamics, "chain", "added dendritic compartment count")
+        _plot_all_variants(target_path, dynamics, "star", "added dendritic compartment count")
 
 
 def print_population_run_header(n_neurons, sample_neuron, dynamics):
@@ -309,21 +397,24 @@ def print_benchmark_results(title, size_label, results):
 class TestNESTGPUCompartmentalPopulationBenchmark:
     @pytest.mark.parametrize("dynamics", ["active", "passive"])
     def test_cm_default_population_benchmark_against_single_precision_cpu_nestml(
-            self, tmp_path, benchmark_target_path, cpu_single_precision_cm_default, dynamics):
+            self, tmp_path, benchmark_models, dynamics):
+        variant = benchmark_models["variant"]
+        cpu_model = benchmark_models["cpu"]
+        target_path = benchmark_models["gpu_path"]
         rng = np.random.default_rng(BENCHMARK_RANDOM_SEED)
         benchmark_results = []
         for n_neurons in BENCHMARK_POPULATION_SIZES:
             sample_neuron = int(rng.integers(0, n_neurons))
             print_population_run_header(n_neurons, sample_neuron, dynamics)
-            print("running single-precision CPU NESTML reference simulation")
+            print(f"running single-precision CPU NESTML reference simulation ({variant})")
             cpu = run_cpu_active_population_cm_default(
-                cpu_single_precision_cm_default, n_neurons, sample_neuron, dynamics=dynamics)
+                cpu_model, n_neurons, sample_neuron, dynamics=dynamics)
             print("running generated NEST-GPU simulation")
             gpu = run_gpu_active_population_cm_default(tmp_path, n_neurons, sample_neuron, dynamics=dynamics)
             compare_population_traces(cpu, gpu, dynamics)
             print("running single-precision CPU NESTML simulation without recording")
             cpu_no_record = run_cpu_active_population_cm_default(
-                cpu_single_precision_cm_default, n_neurons, sample_neuron, record=False, dynamics=dynamics)
+                cpu_model, n_neurons, sample_neuron, record=False, dynamics=dynamics)
             print("running generated NEST-GPU simulation without recording")
             gpu_no_record = run_gpu_active_population_cm_default(
                 tmp_path, n_neurons, sample_neuron, record=False, dynamics=dynamics)
@@ -343,27 +434,31 @@ class TestNESTGPUCompartmentalPopulationBenchmark:
                   f"ratio={gpu_no_record['runtime'] / cpu_no_record['runtime']:.3f}")
 
         print_benchmark_results(f"cm_default {dynamics} population benchmark", "neurons", benchmark_results)
-        plot_population_benchmark(benchmark_results, benchmark_target_path, dynamics)
-        with open(os.path.join(benchmark_target_path, f"gpu_compartmental_{dynamics}_population_benchmark.json"), "w",
-                  encoding="utf-8") as output_file:
+        plot_population_benchmark(benchmark_results, target_path, variant, dynamics)
+        json_path = os.path.join(
+            target_path, f"gpu_compartmental_{variant}_{dynamics}_population_benchmark.json")
+        with open(json_path, "w", encoding="utf-8") as output_file:
             json.dump(benchmark_results, output_file, indent=2)
 
     @pytest.mark.parametrize("dynamics", ["active", "passive"])
     def test_cm_default_compartment_benchmark_against_single_precision_cpu_nestml(
-            self, tmp_path, benchmark_target_path, cpu_single_precision_cm_default, dynamics):
+            self, tmp_path, benchmark_models, dynamics):
+        variant = benchmark_models["variant"]
+        cpu_model = benchmark_models["cpu"]
+        target_path = benchmark_models["gpu_path"]
         benchmark_results = []
         for n_added_compartments in BENCHMARK_COMPARTMENT_SIZES:
             sample_compartment = n_added_compartments
             print_compartment_run_header(n_added_compartments, sample_compartment, dynamics=dynamics)
-            print("running single-precision CPU NESTML reference simulation")
+            print(f"running single-precision CPU NESTML reference simulation ({variant})")
             cpu = run_cpu_active_compartment_cm_default(
-                cpu_single_precision_cm_default, n_added_compartments, sample_compartment, dynamics=dynamics)
+                cpu_model, n_added_compartments, sample_compartment, dynamics=dynamics)
             print("running generated NEST-GPU simulation")
             gpu = run_gpu_active_compartment_cm_default(tmp_path, n_added_compartments, sample_compartment, dynamics=dynamics)
             compare_compartment_traces(cpu, gpu, sample_compartment, dynamics)
             print("running single-precision CPU NESTML simulation without recording")
             cpu_no_record = run_cpu_active_compartment_cm_default(
-                cpu_single_precision_cm_default, n_added_compartments, sample_compartment, record=False, dynamics=dynamics)
+                cpu_model, n_added_compartments, sample_compartment, record=False, dynamics=dynamics)
             print("running generated NEST-GPU simulation without recording")
             gpu_no_record = run_gpu_active_compartment_cm_default(
                 tmp_path, n_added_compartments, sample_compartment, record=False, dynamics=dynamics)
@@ -383,22 +478,27 @@ class TestNESTGPUCompartmentalPopulationBenchmark:
                   f"gpu={gpu_no_record['runtime']:.6f}s, "
                   f"ratio={gpu_no_record['runtime'] / cpu_no_record['runtime']:.3f}")
 
-        print_benchmark_results(f"cm_default {dynamics} chain compartment-count benchmark", "added_comp", benchmark_results)
-        plot_compartment_benchmark(benchmark_results, benchmark_target_path, morphology="chain", dynamics=dynamics)
-        with open(os.path.join(benchmark_target_path, f"gpu_compartmental_{dynamics}_chain_compartment_benchmark.json"), "w",
-                  encoding="utf-8") as output_file:
+        print_benchmark_results(
+            f"cm_default {dynamics} chain compartment-count benchmark", "added_comp", benchmark_results)
+        plot_compartment_benchmark(benchmark_results, target_path, variant, morphology="chain", dynamics=dynamics)
+        json_path = os.path.join(
+            target_path, f"gpu_compartmental_{variant}_{dynamics}_chain_compartment_benchmark.json")
+        with open(json_path, "w", encoding="utf-8") as output_file:
             json.dump(benchmark_results, output_file, indent=2)
 
     @pytest.mark.parametrize("dynamics", ["active", "passive"])
     def test_cm_default_star_compartment_benchmark_against_single_precision_cpu_nestml(
-            self, tmp_path, benchmark_target_path, cpu_single_precision_cm_default, dynamics):
+            self, tmp_path, benchmark_models, dynamics):
+        variant = benchmark_models["variant"]
+        cpu_model = benchmark_models["cpu"]
+        target_path = benchmark_models["gpu_path"]
         benchmark_results = []
         for n_added_compartments in BENCHMARK_COMPARTMENT_SIZES:
             sample_compartment = n_added_compartments
             print_compartment_run_header(n_added_compartments, sample_compartment, morphology="star", dynamics=dynamics)
-            print("running single-precision CPU NESTML reference simulation")
+            print(f"running single-precision CPU NESTML reference simulation ({variant})")
             cpu = run_cpu_active_compartment_cm_default(
-                cpu_single_precision_cm_default, n_added_compartments,
+                cpu_model, n_added_compartments,
                 sample_compartment, morphology="star", dynamics=dynamics)
             print("running generated NEST-GPU simulation")
             gpu = run_gpu_active_compartment_cm_default(
@@ -406,7 +506,7 @@ class TestNESTGPUCompartmentalPopulationBenchmark:
             compare_compartment_traces(cpu, gpu, sample_compartment, dynamics)
             print("running single-precision CPU NESTML simulation without recording")
             cpu_no_record = run_cpu_active_compartment_cm_default(
-                cpu_single_precision_cm_default, n_added_compartments,
+                cpu_model, n_added_compartments,
                 sample_compartment, record=False, morphology="star", dynamics=dynamics)
             print("running generated NEST-GPU simulation without recording")
             gpu_no_record = run_gpu_active_compartment_cm_default(
@@ -430,8 +530,8 @@ class TestNESTGPUCompartmentalPopulationBenchmark:
 
         print_benchmark_results(
             f"cm_default {dynamics} star compartment-count benchmark", "added_comp", benchmark_results)
-        plot_compartment_benchmark(benchmark_results, benchmark_target_path, morphology="star", dynamics=dynamics)
-        with open(os.path.join(
-                benchmark_target_path, f"gpu_compartmental_{dynamics}_star_compartment_benchmark.json"), "w",
-                encoding="utf-8") as output_file:
+        plot_compartment_benchmark(benchmark_results, target_path, variant, morphology="star", dynamics=dynamics)
+        json_path = os.path.join(
+            target_path, f"gpu_compartmental_{variant}_{dynamics}_star_compartment_benchmark.json")
+        with open(json_path, "w", encoding="utf-8") as output_file:
             json.dump(benchmark_results, output_file, indent=2)

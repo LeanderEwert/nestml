@@ -7,6 +7,9 @@ Concentration mechanism implementation for NEST GPU compartmental models.
 {%- import 'directives_cpp/FunctionDeclaration.jinja2' as function_declaration with context %}
 {%- import 'directives_cpp/DeviceFunctionDeclaration.jinja2' as device_function_declaration with context %}
 #include "{{neuronSpecificFileNamesCmSyns["concentrationcurrents"]}}.h"
+{% if use_fastexp -%}
+#include "fastexp.h"
+{% endif -%}
 
 #define NEAR_ZERO 1e-9
 
@@ -351,7 +354,7 @@ struct {{concentration_name}}{{cm_unique_suffix}}Device
       {%- endfor %}
       {%- for ode_variable, ode_info in concentration_info["ODEs"].items() %}
           {%- for propagator, propagator_info in ode_info["transformed_solutions"][0]["propagators"].items() %}
-      y[i_{{ propagator }}*mechanism_stride+slot] = {{ cuda_printer.print(propagator_info["init_expression"], "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
+      y[i_{{ propagator }}*mechanism_stride+slot] = {{ cuda_printer_propagator.print(propagator_info["init_expression"], "slot", black_list=device_black_list.names, stride="mechanism_stride") }};
           {%- endfor %}
           {%- for state, state_solution_info in ode_info["transformed_solutions"][0]["states"].items() %}
       y[i_{{state}}*mechanism_stride+slot] = {{ cuda_printer.print(state_solution_info["update_expression"], "slot", black_list=device_black_list.names, stride="mechanism_stride") }};

@@ -7,6 +7,9 @@ Continuous-input mechanism implementation for NEST GPU compartmental models.
 {%- import 'directives_cpp/FunctionDeclaration.jinja2' as function_declaration with context %}
 {%- import 'directives_cpp/DeviceFunctionDeclaration.jinja2' as device_function_declaration with context %}
 #include "{{neuronSpecificFileNamesCmSyns["continuouscurrents"]}}.h"
+{% if use_fastexp -%}
+#include "fastexp.h"
+{% endif -%}
 
 #define NEAR_ZERO 1e-9
 
@@ -304,7 +307,7 @@ struct {{continuous_name}}{{cm_unique_suffix}}Device
 
       {%- for ode_variable, ode_info in continuous_info["ODEs"].items() %}
           {%- for propagator, propagator_info in ode_info["transformed_solutions"][0]["propagators"].items() %}
-      y[i_{{ propagator }}+i] = {{ cuda_printer.print(propagator_info["init_expression"], "i", black_list=device_black_list.names) }};
+      y[i_{{ propagator }}+i] = {{ cuda_printer_propagator.print(propagator_info["init_expression"], "i", black_list=device_black_list.names) }};
           {%- endfor %}
           {%- for state, state_solution_info in ode_info["transformed_solutions"][0]["states"].items() %}
       y[i_{{state}}+i] = {{ cuda_printer.print(state_solution_info["update_expression"], "i", black_list=device_black_list.names) }};
