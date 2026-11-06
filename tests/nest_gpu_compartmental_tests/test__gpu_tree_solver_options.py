@@ -82,7 +82,9 @@ def test_generated_solver_selection(generated_solver):
     else:
         assert "using Solver = cm_hinesCmContinuousOnlyNestml::Solver;" in header
         assert "cm_tree_downsweep_level_kernel<<<" in numerical_solve
-        assert "cm_tree_solve_root_and_upsweep_kernel<<<" in numerical_solve
+        assert "cm_tree_solve_root_kernel<<<" in numerical_solve
+        assert "cm_tree_upsweep_level_kernel<<<" in numerical_solve
+        assert "cm_tree_gather_kernel<<<" in numerical_solve
         assert "0, stream>>>" in numerical_solve
         assert "r_edd" not in source
         assert "r_edd" not in header

@@ -7,7 +7,7 @@ namespace cm_hines{{cm_unique_suffix}}
 {
 struct Plan
 {
-  std::vector<int> downsweep_nodes, level_offsets;
+  std::vector<int> downsweep_nodes, level_offsets, perm;
 
   void build(const std::vector<int>& parents, const std::vector<int>& child_offsets,
              const std::vector<int>& child_indices, int compartments_per_neuron)
@@ -20,7 +20,9 @@ struct Plan
     std::vector<int> next_level;
     downsweep_nodes.clear();
     level_offsets.clear();
+    perm.clear();
     downsweep_nodes.reserve(size);
+    perm.reserve(size);
     for (int node = 0; node < size; ++node)
     {
       remaining_children[node] = child_offsets[node + 1] - child_offsets[node];
@@ -45,6 +47,9 @@ struct Plan
       current_level.swap(next_level);
     }
     level_offsets.push_back(static_cast<int>(downsweep_nodes.size()));
+    // perm maps a compact global compartment index to its BFS position.
+    perm.resize(size);
+    for (int k = 0; k < size; ++k) perm[downsweep_nodes[k]] = k;
   }
 };
 }

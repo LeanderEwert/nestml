@@ -27,8 +27,8 @@ public:
 private:
   struct Workspace
   {
-    DeviceBuffer<int> parents, child_offsets, child_indices, downsweep_nodes;
-    DeviceBuffer<float> coupling;
+    DeviceBuffer<int> parents, child_offsets, child_indices, downsweep_nodes, perm;
+    DeviceBuffer<float> coupling_bfs, gg_bfs, ff_bfs;
     std::vector<int> level_offsets;
     int neuron_count = 0;
     int compartments_per_neuron = 0;

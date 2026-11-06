@@ -54,13 +54,31 @@ extern "C" int hines_solve(const int* parent_data, int size, int compartments,
     adjacency(parents, offsets, children);
     cm_hines_test::Plan plan;
     plan.build(parents, offsets, children, compartments);
+    const int total = size;
+    const std::vector<int>& perm = plan.perm;
+    std::vector<float> diag_bfs(total), rhs_bfs(total), coup_bfs(total);
+    for (int c = 0; c < total; ++c)
+    {
+      const int k = perm[c];
+      diag_bfs[k] = diagonal[c];
+      rhs_bfs[k] = rhs[c];
+      coup_bfs[k] = coupling[c];
+    }
     for (size_t level = 1; level + 1 < plan.level_offsets.size(); ++level)
       for (int i = plan.level_offsets[level]; i < plan.level_offsets[level + 1]; ++i)
         cm_hines_test::downsweep_node(plan.downsweep_nodes[i], offsets.data(),
-                                     children.data(), coupling, diagonal, rhs);
+                                      children.data(), coup_bfs.data(),
+                                      diag_bfs.data(), rhs_bfs.data(), perm.data());
     for (int neuron = 0; neuron < size / compartments; ++neuron)
-      cm_hines_test::solve_root_and_upsweep(neuron, vars, n_var, voltage_base,
-        diagonal, rhs, coupling, parents.data(), compartments, thresholds, spikes, above);
+      cm_hines_test::solve_root(neuron, vars, n_var, compartments, voltage_base,
+        diag_bfs.data(), rhs_bfs.data(), perm.data(), thresholds, spikes, above);
+    for (int neuron = 0; neuron < size / compartments; ++neuron)
+      for (int local = 1; local < compartments; ++local)
+      {
+        const int i = neuron * compartments + local;
+        cm_hines_test::upsweep_node(neuron, vars, n_var, compartments, voltage_base,
+          diag_bfs.data(), rhs_bfs.data(), coup_bfs.data(), parents.data(), perm.data(), i);
+      }
     return 0;
   }
   catch (const std::exception&) { return 1; }

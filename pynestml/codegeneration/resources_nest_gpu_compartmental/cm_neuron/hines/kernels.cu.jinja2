@@ -3,45 +3,91 @@
  */
 namespace cm_hines{{cm_unique_suffix}}
 {
-__global__ void cm_tree_downsweep_level_kernel(const int* level_nodes,
-                                              int level_node_count,
-                                              const int* child_offsets,
-                                              const int* child_indices,
-                                              const float* hh,
-                                              float* gg,
-                                              float* ff)
+// Gather compact-ordered scratch into breadth-first order so the sweeps read
+// consecutive memory. perm maps a compact compartment index to its BFS position.
+__global__ void cm_tree_gather_kernel(const float* src, float* dst_bfs, const int* perm, int n)
 {
-  const int level_index = blockIdx.x * blockDim.x + threadIdx.x;
-  if (level_index >= level_node_count)
+  const int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i >= n)
   {
     return;
   }
-
-  downsweep_node(level_nodes[level_index], child_offsets, child_indices, hh, gg, ff);
+  dst_bfs[perm[i]] = src[i];
 }
 
-__global__ void cm_tree_solve_root_and_upsweep_kernel(float* population_vars,
-                                                     int n_var,
-                                                     int compartment_voltage_base_index,
-                                                     const float* gg,
-                                                     const float* ff,
-                                                     const float* hh,
-                                                     const int* parent_index,
-                                                     int neuron_count,
-                                                     int compartment_count,
-                                                     const float* thresholds,
-                                                     int* self_spikes,
-                                                     bool* above_threshold)
+// Down-sweep: eliminate a node's children into it. One thread per node, launched
+// per level bottom-up so every child is eliminated before its parent.
+__global__ void cm_tree_downsweep_level_kernel(const int* level_nodes,
+                                               int level_node_count,
+                                               const int* child_offsets,
+                                               const int* child_indices,
+                                               const float* hh,
+                                               float* gg,
+                                               float* ff,
+                                               const int* perm)
+{
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= level_node_count)
+  {
+    return;
+  }
+  downsweep_node(level_nodes[idx], child_offsets, child_indices, hh, gg, ff, perm);
+}
+
+// Root solve: one thread per neuron.
+__global__ void cm_tree_solve_root_kernel(float* population_vars,
+                                          int n_var,
+                                          int compartment_voltage_base_index,
+                                          const float* gg,
+                                          const float* ff,
+                                          const int* perm,
+                                          int neuron_count,
+                                          int compartment_count,
+                                          const float* thresholds,
+                                          int* self_spikes,
+                                          bool* above_threshold)
 {
   const int i_neuron = blockIdx.x * blockDim.x + threadIdx.x;
   if (i_neuron >= neuron_count || compartment_count <= 0)
   {
     return;
   }
+  solve_root(i_neuron, population_vars, n_var, compartment_count, compartment_voltage_base_index,
+             gg, ff, perm, thresholds, self_spikes, above_threshold);
+}
 
-  solve_root_and_upsweep(i_neuron, population_vars, n_var, compartment_voltage_base_index,
-                         gg, ff, hh, parent_index, compartment_count, thresholds,
-                         self_spikes, above_threshold);
+// Up-sweep: compute one non-root node's voltage from its already-solved parent.
+// One thread per node, launched per level top-down so the parent is solved first.
+// Roots (parent_index < 0) are skipped; solve_root handles them.
+__global__ void cm_tree_upsweep_level_kernel(const int* level_nodes,
+                                             int level_node_count,
+                                             const int* parent_index,
+                                             const int* perm,
+                                             float* population_vars,
+                                             int n_var,
+                                             int compartment_voltage_base_index,
+                                             const float* gg,
+                                             const float* ff,
+                                             const float* hh,
+                                             int neuron_count,
+                                             int compartment_count,
+                                             const float* thresholds,
+                                             int* self_spikes,
+                                             bool* above_threshold)
+{
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx >= level_node_count)
+  {
+    return;
+  }
+  const int node = level_nodes[idx];
+  const int i_neuron = node / compartment_count;
+  if (parent_index[node] < 0)
+  {
+    return;
+  }
+  upsweep_node(i_neuron, population_vars, n_var, compartment_count, compartment_voltage_base_index,
+               gg, ff, hh, parent_index, perm, node);
 }
 
 void Solver::initialize(const std::vector<int>& parents, const std::vector<int>& child_offsets,
@@ -60,7 +106,18 @@ void Solver::initialize(const std::vector<int>& parents, const std::vector<int>&
   workspace->child_offsets.upload(child_offsets);
   workspace->child_indices.upload(child_indices);
   workspace->downsweep_nodes.upload(plan.downsweep_nodes);
-  workspace->coupling.upload(coupling);
+   workspace->perm.upload(plan.perm);
+   const int total = static_cast<int>(parents.size());
+   // BFS-ordered scratch buffers for the diagonal and right-hand side.
+   workspace->gg_bfs.allocate(total);
+   workspace->ff_bfs.allocate(total);
+   // Coupling is static: build its breadth-first copy once on the host.
+  std::vector<float> coupling_bfs(total);
+  for (int c = 0; c < total; ++c)
+  {
+    coupling_bfs[plan.perm[c]] = coupling[c];
+  }
+  workspace->coupling_bfs.upload(coupling_bfs);
   workspace->level_offsets = std::move(plan.level_offsets);
   workspace->neuron_count = static_cast<int>(parents.size()) / compartments_per_neuron;
   workspace->compartments_per_neuron = compartments_per_neuron;
@@ -71,31 +128,57 @@ void Solver::solve(float* diagonal, float* rhs, float* population_vars,
                    int n_var, int voltage_base, const float* thresholds, int* self_spikes,
                    bool* above_threshold, cudaStream_t stream)
 {
-  const int downsweep_block_size = 256;
-  const int level_count = static_cast<int>(workspace_->level_offsets.size()) - 1;
-  // Level zero contains leaves, whose matrix entries need no elimination.
-  for (int level = 1; level < level_count; ++level)
-  {
-    const int level_begin = workspace_->level_offsets[level];
-    const int level_node_count = workspace_->level_offsets[level + 1] - level_begin;
-    const int downsweep_grid_size = (level_node_count + downsweep_block_size - 1) / downsweep_block_size;
-    cm_tree_downsweep_level_kernel<<<downsweep_grid_size, downsweep_block_size, 0, stream>>>(
-      workspace_->downsweep_nodes.data + level_begin,
-      level_node_count,
-      workspace_->child_offsets.data,
-      workspace_->child_indices.data,
-      workspace_->coupling.data,
-      diagonal,
-      rhs);
-  }
+   const int n = workspace_->neuron_count * workspace_->compartments_per_neuron;
+   const int gather_block_size = 256;
+   const int gather_grid_size = (n + gather_block_size - 1) / gather_block_size;
+   // Refresh breadth-first scratch from the compact construction output.
+   cm_tree_gather_kernel<<<gather_grid_size, gather_block_size, 0, stream>>>(
+     diagonal, workspace_->gg_bfs.data, workspace_->perm.data, n);
+   cm_tree_gather_kernel<<<gather_grid_size, gather_block_size, 0, stream>>>(
+     rhs, workspace_->ff_bfs.data, workspace_->perm.data, n);
 
-  const int neuron_block_size = 128;
-  const int neuron_grid_size = (workspace_->neuron_count + neuron_block_size - 1) / neuron_block_size;
-  cm_tree_solve_root_and_upsweep_kernel<<<neuron_grid_size, neuron_block_size, 0, stream>>>(
-    population_vars, n_var, voltage_base, diagonal, rhs,
-    workspace_->coupling.data, workspace_->parents.data,
-    workspace_->neuron_count, workspace_->compartments_per_neuron,
-    thresholds, self_spikes, above_threshold);
-  check_cuda(cudaGetLastError());
+   const int downsweep_block_size = 256;
+   const int level_count = static_cast<int>(workspace_->level_offsets.size()) - 1;
+   for (int level = 1; level < level_count; ++level)
+   {
+     const int level_begin = workspace_->level_offsets[level];
+     const int level_node_count = workspace_->level_offsets[level + 1] - level_begin;
+     const int downsweep_grid_size = (level_node_count + downsweep_block_size - 1) / downsweep_block_size;
+     cm_tree_downsweep_level_kernel<<<downsweep_grid_size, downsweep_block_size, 0, stream>>>(
+       workspace_->downsweep_nodes.data + level_begin,
+       level_node_count,
+       workspace_->child_offsets.data,
+       workspace_->child_indices.data,
+       workspace_->coupling_bfs.data,
+       workspace_->gg_bfs.data,
+       workspace_->ff_bfs.data,
+       workspace_->perm.data);
+   }
+
+   const int neuron_block_size = 128;
+   const int neuron_grid_size = (workspace_->neuron_count + neuron_block_size - 1) / neuron_block_size;
+   cm_tree_solve_root_kernel<<<neuron_grid_size, neuron_block_size, 0, stream>>>(
+     population_vars, n_var, voltage_base,
+     workspace_->gg_bfs.data, workspace_->ff_bfs.data, workspace_->perm.data,
+     workspace_->neuron_count, workspace_->compartments_per_neuron,
+     thresholds, self_spikes, above_threshold);
+
+   const int upsweep_block_size = 256;
+   for (int level = level_count - 2; level >= 0; --level)
+   {
+     const int level_begin = workspace_->level_offsets[level];
+     const int level_node_count = workspace_->level_offsets[level + 1] - level_begin;
+     const int upsweep_grid_size = (level_node_count + upsweep_block_size - 1) / upsweep_block_size;
+     cm_tree_upsweep_level_kernel<<<upsweep_grid_size, upsweep_block_size, 0, stream>>>(
+       workspace_->downsweep_nodes.data + level_begin,
+       level_node_count,
+       workspace_->parents.data,
+       workspace_->perm.data,
+       population_vars, n_var, voltage_base,
+       workspace_->gg_bfs.data, workspace_->ff_bfs.data, workspace_->coupling_bfs.data,
+       workspace_->neuron_count, workspace_->compartments_per_neuron,
+       thresholds, self_spikes, above_threshold);
+   }
+   check_cuda(cudaGetLastError());
 }
 }
