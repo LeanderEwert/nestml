@@ -322,30 +322,110 @@ def run_active_compartment_simulation(
     return result
 
 
+def run_active_compartment_population_simulation(
+        n_neurons, n_added_compartments, sample_neuron, sample_compartment,
+        morphology="star", record=True, dynamics="passive"):
+    """Population of ``n_neurons`` neurons, each with a ``morphology`` tree of
+    ``n_added_compartments`` dendritic compartments.
+
+    This is the 2-D benchmark primitive: unlike ``run_active_population_simulation``
+    (fixed 2 compartments) and ``run_active_compartment_simulation`` (1 neuron) it varies
+    the neuron count and the per-neuron compartment count together. Each process still
+    performs a single ``Create``, so one call == one ``(neurons, comps)`` point.
+    """
+    import nestgpu as ngpu
+
+    n_compartments = n_added_compartments + 1
+    if sample_neuron < 0 or sample_neuron >= n_neurons:
+        raise ValueError("sample_neuron must be inside the created population")
+    if sample_compartment < 0 or sample_compartment >= n_compartments:
+        raise ValueError("sample_compartment must be inside the created morphology")
+    if morphology not in ("chain", "star"):
+        raise ValueError(f"Unknown population-compartment morphology: {morphology}")
+
+    recordables = [f"v_comp{sample_compartment}"]
+
+    ngpu.SetTimeResolution(DEFAULT_DT)
+    _synchronize(ngpu)
+    t_start = time.perf_counter()
+
+    neurons = ngpu.Create(DEFAULT_MODEL_NAME, n_neurons)
+    config = benchmark_neuron_configuration(n_added_compartments, morphology, dynamics)
+    for i_neuron in range(n_neurons):
+        ngpu.SetStatus(neurons[i_neuron:i_neuron + 1], config)
+
+    if record:
+        recorder = ngpu.CreateRecord("", recordables,
+                                     [neurons[sample_neuron]] * len(recordables), [0] * len(recordables))
+
+    spike_generator = ngpu.Create("spike_generator", n_neurons)
+    ngpu.SetStatus(spike_generator, {"spike_times": COMPARTMENT_BENCHMARK_SPIKE_TIMES})
+
+    conn_dict = {"rule": "one_to_one"}
+    ngpu.Connect(spike_generator, neurons, conn_dict, {"weight": 5.0, "delay": 0.5, "receptor": 0})
+
+    ngpu.Simulate(DEFAULT_SIM_TIME)
+
+    _synchronize(ngpu)
+    runtime = time.perf_counter() - t_start
+    recorded_data = ngpu.GetRecordData(recorder) if record else None
+
+    result = {
+        "n_neurons": n_neurons,
+        "n_added_compartments": n_added_compartments,
+        "n_compartments": n_compartments,
+        "sample_neuron": sample_neuron,
+        "sample_compartment": sample_compartment,
+        "morphology": morphology,
+        "recording_enabled": record,
+        "dynamics": dynamics,
+        "runtime": runtime,
+    }
+    if record:
+        _assert_record_data(recorded_data, recordables)
+        result["traces"] = _record_data_to_dict(recorded_data, recordables)
+    return result
+
+
 if __name__ == "__main__":
     # Retain the existing commands and extend them symmetrically to both dynamics.
+    # call_kind selects the simulation entry point; morphology is passed through.
+    #   population:            <n_neurons> <sample_neuron>
+    #   population_compartment: <n_neurons> <n_added_compartments> <sample_neuron> <sample_compartment>
+    #   compartment (chain/star/tree): <n_added_compartments> <sample_compartment> [parents_json]
     modes = {}
     for dynamics in ("active", "passive"):
         for record in (True, False):
             suffix = "json" if record else "no-record-json"
-            modes[f"{dynamics}-population-{suffix}"] = ("population", dynamics, record)
-            modes[f"{dynamics}-compartment-{suffix}"] = ("chain", dynamics, record)
-            modes[f"{dynamics}-star-compartment-{suffix}"] = ("star", dynamics, record)
-            modes[f"{dynamics}-tree-compartment-{suffix}"] = ("tree", dynamics, record)
+            modes[f"{dynamics}-population-{suffix}"] = ("population", None, dynamics, record)
+            modes[f"{dynamics}-population-compartment-{suffix}"] = (
+                "population_compartment", "chain", dynamics, record)
+            modes[f"{dynamics}-star-population-compartment-{suffix}"] = (
+                "population_compartment", "star", dynamics, record)
+            modes[f"{dynamics}-compartment-{suffix}"] = ("compartment", "chain", dynamics, record)
+            modes[f"{dynamics}-star-compartment-{suffix}"] = ("compartment", "star", dynamics, record)
+            modes[f"{dynamics}-tree-compartment-{suffix}"] = ("compartment", "tree", dynamics, record)
     if len(sys.argv) == 3 and sys.argv[1] == "default-json":
         result = run_default_simulation()
-    elif len(sys.argv) in (5, 6) and sys.argv[1] in modes:
-        morphology, dynamics, record = modes[sys.argv[1]]
-        size, sample = int(sys.argv[3]), int(sys.argv[4])
-        parents = json.loads(sys.argv[5]) if len(sys.argv) == 6 else None
-        if morphology == "population":
-            result = run_active_population_simulation(size, sample, record=record, dynamics=dynamics)
-        else:
+    elif len(sys.argv) in (5, 6, 7) and sys.argv[1] in modes:
+        call_kind, morphology, dynamics, record = modes[sys.argv[1]]
+        if call_kind == "population":
+            result = run_active_population_simulation(
+                int(sys.argv[3]), int(sys.argv[4]), record=record, dynamics=dynamics)
+        elif call_kind == "population_compartment":
+            result = run_active_compartment_population_simulation(
+                int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6]),
+                morphology=morphology, record=record, dynamics=dynamics)
+        else:  # compartment (chain/star/tree)
+            size, sample = int(sys.argv[3]), int(sys.argv[4])
+            parents = json.loads(sys.argv[5]) if len(sys.argv) == 6 else None
             result = run_active_compartment_simulation(
                 size, sample, record=record, morphology=morphology, dynamics=dynamics, parents=parents)
     else:
         raise SystemExit("usage: gpu_compartmental_model_runner.py default-json output.json OR "
-                          "<active|passive>-<population|compartment|star-compartment|tree-compartment>-"
-                          "<json|no-record-json> output.json size sample_index [parents_json]")
+                          "<dynamics>-<population|population-compartment|star-population-compartment|"
+                          "compartment|star-compartment|tree-compartment>-<json|no-record-json> "
+                          "output.json [size [sample_index [parents_json]]] "
+                          "[n_neurons n_added_compartments sample_neuron sample_compartment]")
     with open(sys.argv[2], "w", encoding="utf-8") as output_file:
         json.dump(result, output_file)
